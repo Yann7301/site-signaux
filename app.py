@@ -21,7 +21,7 @@ capital_total = st.sidebar.number_input("Capital Total ($)", min_value=50.0, val
 risque_pct = st.sidebar.slider("Risque par trade (%)", min_value=0.5, max_value=5.0, value=1.0, step=0.5)
 
 st.sidebar.header("🔍 Configuration du Scanner")
-symboles_defaut = ["BTC/USD", "ETH/USD", "SOL/USD", "AVAX/USD"]
+symboles_defaut = ["BTC/USD", "ETH/USD", "SOL/USD", "AVAX/USD", "ADA/USD"]
 symboles_choisis = st.sidebar.multiselect("Paires à scanner", symboles_defaut, default=symboles_defaut)
 timeframe = st.sidebar.selectbox("Horizon de temps (Timeframe)", ["1h", "4h", "1d"], index=0)
 
