@@ -25,6 +25,37 @@ symboles_defaut = ["BTC/USD", "ETH/USD", "SOL/USD", "AVAX/USD", "ADA/USD"]
 symboles_choisis = st.sidebar.multiselect("Paires à scanner", symboles_defaut, default=symboles_defaut)
 timeframe = st.sidebar.selectbox("Horizon de temps (Timeframe)", ["1h", "4h", "1d"], index=0)
 
+# --- FONCTION TEST EMAIL ---
+def envoyer_email_test():
+    """Envoie un mail de test immédiat via l'API Resend pour vérifier les secrets."""
+    api_key = st.secrets.get("RESEND_API_KEY")
+    to_email = st.secrets.get("TO_EMAIL")
+
+    if not api_key or not to_email:
+        st.sidebar.error("⚠️ Secrets RESEND_API_KEY ou TO_EMAIL manquants.")
+        return False
+
+    resend.api_key = api_key
+
+    try:
+        resend.Emails.send({
+            "from": "Scanner Crypto <onboarding@resend.dev>",
+            "to": [to_email],
+            "subject": "🧪 Test de configuration Resend - Scanner Crypto",
+            "html": "<p>Ceci est un <b>email de test</b> envoyé depuis ton application Streamlit Cloud ! Ton integration Resend fonctionne parfaitement.</p>"
+        })
+        return True
+    except Exception as e:
+        st.sidebar.error(f"Erreur d'envoi : {e}")
+        return False
+
+# --- BOUTON DE TEST DANS LA SIDEBAR ---
+st.sidebar.header("📧 Test des Alertes")
+if st.sidebar.button("🧪 Tester l'envoi d'email"):
+    with st.sidebar.spinner("Envoi du mail de test..."):
+        if envoyer_email_test():
+            st.sidebar.success("✅ Mail de test envoyé avec succès !")
+
 # --- FONCTIONS TECHNIQUES & CALCULS ---
 
 @st.cache_data(ttl=300)
@@ -70,7 +101,7 @@ def calculer_indicateurs(df):
 def analyser_signal(df):
     """Détecte les signaux ACHAT ou VENTE selon les indicateurs."""
     derniere_ligne = df.iloc[-1]
-    
+
     rsi = derniere_ligne['RSI']
     macd = derniere_ligne['MACD']
     signal_macd = derniere_ligne['Signal_MACD']
@@ -102,7 +133,7 @@ def calculer_taille_position(capital, risque_pct, prix_entree, stop_loss):
     distance_sl_pct = abs(prix_entree - stop_loss) / prix_entree
     if distance_sl_pct == 0:
         return 0.0, 0.0
-    
+
     montant_risque_usd = capital * (risque_pct / 100.0)
     position_usd = montant_risque_usd / distance_sl_pct
     return round(position_usd, 2), round(montant_risque_usd, 2)
@@ -155,19 +186,19 @@ def envoyer_email_alerte(symbol, signal_type, prix, sl, tp, pos_usd, risque_usd)
 
 if st.button("🚀 Lancer le balayage du marché"):
     resultats = []
-    
+
     for symbol in symboles_choisis:
         try:
             df = charger_donnees(symbol, timeframe)
             df = calculer_indicateurs(df)
             signal, prix, sl, tp, atr = analyser_signal(df)
-            
+
             if signal in ["ACHAT", "VENTE"]:
                 pos_usd, risque_usd = calculer_taille_position(capital_total, risque_pct, prix, sl)
-                
+
                 # Envoi de l'alerte mail
                 mail_envoye = envoyer_email_alerte(symbol, signal, prix, sl, tp, pos_usd, risque_usd)
-                
+
                 resultats.append({
                     "Paire": symbol,
                     "Signal": signal,
