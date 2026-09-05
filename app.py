@@ -29,8 +29,8 @@ timeframe = st.sidebar.selectbox("Horizon de temps (Timeframe)", ["1h", "4h", "1
 
 @st.cache_data(ttl=300)
 def charger_donnees(symbol, timeframe, limit=100):
-    """Récupère les données OHLCV depuis Binance via CCXT."""
-    exchange = ccxt.binance()
+    """Récupère les données OHLCV depuis Coinbase via CCXT."""
+    exchange = ccxt.coinbase()
     ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
