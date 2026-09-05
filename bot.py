@@ -1,222 +1,142 @@
-import os
 import json
+import time
 import requests
 import pandas as pd
 import numpy as np
-import resend
-import time
+from datetime import datetime
 
-YOUHOLDER_TOP_30 = [
-    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
-    "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT", "POLUSDT",
-    "LTCUSDT", "BCHUSDT", "UNIUSDT", "ATOMUSDT", "XLMUSDT",
-    "ETCUSDT", "NEARUSDT", "ALGOUSDT", "ICPUSDT", "FILUSDT",
-    "APTUSDT", "OPUSDT", "ARBUSDT", "LDOUSDT", "INJUSDT",
-    "TIAUSDT", "SUIUSDT", "RENDERUSDT", "PEPEUSDT", "DOGEUSDT"
-]
-
-CONFIG_FILE = "config.json"
-
-default_config = {
-    "timeframe": "15m",
-    "capital_initial": 1000.0,
-    "risque_pct": 1.0,
-    "type_sl_tp": "Pourcentage Fixe",
-    "stop_loss_pct": 1.5,
-    "take_profit_pct": 3.0,
-    "rsi_period": 14,
-    "rsi_oversold": 40,
-    "rsi_overbought": 60,
-    "atr_period": 14,
-    "atr_mult_sl": 1.5,
-    "atr_mult_tp": 3.0
+# --- DICTIONNAIRE DE MAPPING (Identique à app.py) ---
+YOUHOLDER_MAP = {
+    "BTCUSDT": "bitcoin", "ETHUSDT": "ethereum", "SOLUSDT": "solana", "BNBUSDT": "binancecoin",
+    "XRPUSDT": "ripple", "ADAUSDT": "cardano", "AVAXUSDT": "avalanche-2", "DOTUSDT": "polkadot",
+    "LINKUSDT": "chainlink", "POLUSDT": "polygon-ecosystem-token", "LTCUSDT": "litecoin",
+    "BCHUSDT": "bitcoin-cash", "UNIUSDT": "uniswap", "ATOMUSDT": "cosmos", "XLMUSDT": "stellar",
+    "ETCUSDT": "ethereum-classic", "NEARUSDT": "near", "ALGOUSDT": "algorand", "ICPUSDT": "internet-computer",
+    "FILUSDT": "filecoin", "APTUSDT": "aptos", "OPUSDT": "optimism", "ARBUSDT": "arbitrum",
+    "LDOUSDT": "lido-dao", "INJUSDT": "injective-protocol", "TIAUSDT": "celestia", "SUIUSDT": "sui",
+    "RENDERUSDT": "render-token", "PEPEUSDT": "pepe", "DOGEUSDT": "dogecoin"
 }
 
-if os.path.exists(CONFIG_FILE):
+# --- CHARGEMENT DE LA CONFIGURATION ---
+def load_config():
+    default_config = {
+        "timeframe": "15m",
+        "capital_initial": 1000.0,
+        "type_sl_tp": "Pourcentage Fixe",
+        "stop_loss_pct": 1.5,
+        "take_profit_pct": 3.0,
+        "rsi_period": 14,
+        "rsi_oversold": 40,
+        "rsi_overbought": 60,
+        "atr_period": 14,
+        "atr_mult_sl": 1.5,
+        "atr_mult_tp": 3.0
+    }
     try:
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+        with open("config.json", "r") as f:
             config = json.load(f)
-        print(f"⚙️ Configuration chargée depuis {CONFIG_FILE}")
-    except Exception as e:
-        print(f"⚠️ Erreur de lecture de {CONFIG_FILE}, utilisation de la config par défaut : {e}")
-        config = default_config
-else:
-    config = default_config
+            print("⚙️ Configuration 'config.json' chargée avec succès.")
+            return config
+    except FileNotFoundError:
+        print("⚠️ 'config.json' introuvable. Utilisation des paramètres par défaut.")
+        return default_config
 
-TIMEFRAME = config.get("timeframe", "15m")
-CAPITAL = config.get("capital_initial", 1000.0)
-RISQUE_PCT = config.get("risque_pct", 1.0)
-TYPE_SL_TP = config.get("type_sl_tp", "Pourcentage Fixe")
+# --- RÉCUPÉRATION DES DONNÉES DE MARCHÉ ---
+def fetch_data(symbol, interval):
+    coin_id = YOUHOLDER_MAP.get(symbol)
+    if not coin_id:
+        return pd.DataFrame()
 
-def get_klines(symbol, interval, limit=100):
-    coin = symbol.replace("USDT", "")
-    granularity_map = {"15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
-    granularity = granularity_map.get(interval, 900)
-    
-    # 1. API Coinbase (Ultra-stable et non restreinte)
+    days_map = {"15m": "1", "1h": "7", "4h": "14", "1d": "30"}
+    days = days_map.get(interval, "1")
+
+    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart?vs_currency=usd&days={days}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+
     try:
-        url = f"https://api.exchange.coinbase.com/products/{coin}-USD/candles?granularity={granularity}"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        res = requests.get(url, headers=headers, timeout=5)
+        res = requests.get(url, headers=headers, timeout=10)
         if res.status_code == 200:
             data = res.json()
-            if isinstance(data, list) and len(data) > 0:
-                df = pd.DataFrame(data, columns=['timestamp', 'low', 'high', 'open', 'close', 'volume'])
-                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
-                df = df.sort_values('timestamp').reset_index(drop=True)
-                for col in ['open', 'high', 'low', 'close', 'volume']:
-                    df[col] = df[col].astype(float)
-                return df.tail(limit)
-    except Exception:
-        pass
-
-    # 2. Secours Binance US
-    try:
-        url = f"https://api.binance.us/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-        res = requests.get(url, timeout=5)
-        if res.status_code == 200:
-            data = res.json()
-            if isinstance(data, list) and len(data) > 0:
-                df = pd.DataFrame(data, columns=[
-                    'timestamp', 'open', 'high', 'low', 'close', 'volume',
-                    'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'
-                ])
+            prices = data.get("prices", [])
+            if prices:
+                df = pd.DataFrame(prices, columns=['timestamp', 'close'])
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                for col in ['open', 'high', 'low', 'close', 'volume']:
-                    df[col] = df[col].astype(float)
+                df['open'] = df['close'].shift(1).fillna(df['close'])
+                df['high'] = df[['open', 'close']].max(axis=1)
+                df['low'] = df[['open', 'close']].min(axis=1)
                 return df
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"❌ Erreur lors de la récupération de {symbol} : {e}")
 
     return pd.DataFrame()
 
-def analyze_all_market():
-    signals_detected = []
-    montant_risque = CAPITAL * (RISQUE_PCT / 100)
+# --- CALCUL DES INDICATEURS ---
+def calculate_indicators(df, config):
+    if len(df) < config["rsi_period"]:
+        return df
 
-    print(f"🔍 Démarrage du scan global sur {len(YOUHOLDER_TOP_30)} cryptos ({TIMEFRAME})...")
+    # RSI
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=config["rsi_period"]).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=config["rsi_period"]).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
 
-    for symbol in YOUHOLDER_TOP_30:
-        df = get_klines(symbol, TIMEFRAME)
-        time.sleep(0.05)
+    # ATR
+    high_low = df['high'] - df['low']
+    high_close = np.abs(df['high'] - df['close'].shift())
+    low_close = np.abs(df['low'] - df['close'].shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = np.max(ranges, axis=1)
+    df['ATR'] = true_range.rolling(config["atr_period"]).mean()
 
-        if df.empty or len(df) < 30:
+    return df
+
+# --- BOUCLE PRINCIPALE DU BOT ---
+def run_bot():
+    config = load_config()
+    print(f"🚀 Bot démarré le {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"🔄 Analyse en cours sur 30 cryptos (Unité de temps : {config['timeframe']})...\n")
+
+    signals_found = 0
+
+    for symbol in YOUHOLDER_MAP.keys():
+        df = fetch_data(symbol, config["timeframe"])
+        time.sleep(0.2)  # Pause pour éviter d'atteindre les limites de requêtes de l'API
+
+        if df.empty or len(df) < config["rsi_period"]:
             continue
 
-        rsi_period = config.get("rsi_period", 14)
-        delta = df['close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=rsi_period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period).mean()
-        rs = gain / loss
-        df['RSI'] = 100 - (100 / (1 + rs))
+        df = calculate_indicators(df, config)
 
-        atr_period = config.get("atr_period", 14)
-        high_low = df['high'] - df['low']
-        high_close = np.abs(df['high'] - df['close'].shift())
-        low_close = np.abs(df['low'] - df['close'].shift())
-        ranges = pd.concat([high_low, high_close, low_close], axis=1)
-        true_range = np.max(ranges, axis=1)
-        df['ATR'] = true_range.rolling(atr_period).mean()
+        price = df['close'].iloc[-1]
+        rsi = df['RSI'].iloc[-1]
+        atr = df['ATR'].iloc[-1] if not pd.isna(df['ATR'].iloc[-1]) else 0
 
-        current_price = df['close'].iloc[-1]
-        current_rsi = df['RSI'].iloc[-1]
-        current_atr = df['ATR'].iloc[-1]
+        if pd.isna(rsi):
+            continue
 
-        if TYPE_SL_TP == "Pourcentage Fixe":
-            sl_pct = config.get("stop_loss_pct", 1.5)
-            tp_pct = config.get("take_profit_pct", 3.0)
-            sl_price = current_price * (1 - sl_pct / 100)
-            tp_price = current_price * (1 + tp_pct / 100)
+        # Calcul SL/TP
+        if config["type_sl_tp"] == "Pourcentage Fixe":
+            sl_price = price * (1 - config["stop_loss_pct"] / 100)
+            tp_price = price * (1 + config["take_profit_pct"] / 100)
         else:
-            mult_sl = config.get("atr_mult_sl", 1.5)
-            mult_tp = config.get("atr_mult_tp", 3.0)
-            sl_price = current_price - (current_atr * mult_sl)
-            tp_price = current_price + (current_atr * mult_tp)
+            sl_price = price - (atr * config["atr_mult_sl"])
+            tp_price = price + (atr * config["atr_mult_tp"])
 
-        sl_dist = current_price - sl_price
-        position_size_crypto = montant_risque / sl_dist if sl_dist > 0 else 0
-        position_size_usd = position_size_crypto * current_price
+        # Analyse des opportunités
+        if rsi < config["rsi_oversold"]:
+            signals_found += 1
+            print(f"🟢 [ACHAT] {symbol} | Prix: ${price:,.4f} | RSI: {rsi:.1f} | TP: ${tp_price:,.4f} | SL: ${sl_price:,.4f}")
+        elif rsi > config["rsi_overbought"]:
+            signals_found += 1
+            print(f"🔴 [VENTE] {symbol} | Prix: ${price:,.4f} | RSI: {rsi:.1f} | TP: ${tp_price:,.4f} | SL: ${sl_price:,.4f}")
 
-        rsi_oversold = config.get("rsi_oversold", 40)
-        rsi_overbought = config.get("rsi_overbought", 60)
+    if signals_found == 0:
+        print("💤 Aucun signal détecté sur ce cycle.")
 
-        signal = None
-        if current_rsi < rsi_oversold:
-            signal = f"ACHAT (RSI < {rsi_oversold})"
-        elif current_rsi > rsi_overbought:
-            signal = f"VENTE (RSI > {rsi_overbought})"
-
-        if signal:
-            signals_detected.append({
-                "symbol": symbol,
-                "signal": signal,
-                "price": current_price,
-                "rsi": current_rsi,
-                "tp": tp_price,
-                "sl": sl_price,
-                "pos_usd": position_size_usd,
-                "risk_usd": montant_risque
-            })
-
-    print(f"📊 Scan terminé : {len(signals_detected)} signal(aux) trouvé(s).")
-
-    if signals_detected:
-        send_summary_email(signals_detected)
-
-def send_summary_email(signals):
-    api_key = os.environ.get("RESEND_API_KEY")
-    to_email = os.environ.get("TO_EMAIL")
-
-    if not api_key or not to_email:
-        print("❌ Secrets RESEND_API_KEY ou TO_EMAIL manquants.")
-        return
-
-    resend.api_key = api_key
-
-    rows_html = ""
-    for item in signals:
-        rows_html += f"""
-        <tr>
-            <td style="padding:8px; border:1px solid #ddd;"><b>{item['symbol']}</b></td>
-            <td style="padding:8px; border:1px solid #ddd;">{item['signal']}</td>
-            <td style="padding:8px; border:1px solid #ddd;">${item['price']:,.4f}</td>
-            <td style="padding:8px; border:1px solid #ddd;">${item['tp']:,.4f}</td>
-            <td style="padding:8px; border:1px solid #ddd;">${item['sl']:,.4f}</td>
-            <td style="padding:8px; border:1px solid #ddd;">${item['pos_usd']:,.2f}</td>
-        </tr>
-        """
-
-    html_content = f"""
-    <h2>🚨 SIGNAUX TRADING YOUHOLDER ({TIMEFRAME})</h2>
-    <p>Le scan automatique a détecté des opportunités avec vos règles configurées :</p>
-    <table style="border-collapse:collapse; width:100%;">
-        <thead>
-            <tr style="background-color:#f2f2f2;">
-                <th style="padding:8px; border:1px solid #ddd;">Crypto</th>
-                <th style="padding:8px; border:1px solid #ddd;">Signal</th>
-                <th style="padding:8px; border:1px solid #ddd;">Prix</th>
-                <th style="padding:8px; border:1px solid #ddd;">TP</th>
-                <th style="padding:8px; border:1px solid #ddd;">SL</th>
-                <th style="padding:8px; border:1px solid #ddd;">Taille Position</th>
-            </tr>
-        </thead>
-        <tbody>
-            {rows_html}
-        </tbody>
-    </table>
-    """
-
-    try:
-        resend.Emails.send({
-            "from": "Scanner YouHolder <onboarding@resend.dev>",
-            "to": [to_email],
-            "subject": f"🤖 {len(signals)} SIGNAL(AUX) YOUHOLDER DÉTECTÉ(S)",
-            "html": html_content
-        })
-        print("📧 Email récapitulatif envoyé avec succès !")
-    except Exception as e:
-        print(f"❌ Erreur lors de l'envoi : {e}")
+    print(f"\n✅ Analyse terminée. Prochain scan dans 15 minutes.")
 
 if __name__ == "__main__":
-    analyze_all_market()
+    run_bot()
 
