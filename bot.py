@@ -5,12 +5,13 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 
-YOUHOLDER_TOP_30 = [
-    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "AVAXUSDT", 
-    "DOTUSDT", "LINKUSDT", "POLUSDT", "LTCUSDT", "BCHUSDT", "UNIUSDT", "ATOMUSDT", 
-    "XLMUSDT", "ETCUSDT", "NEARUSDT", "ALGOUSDT", "ICPUSDT", "FILUSDT", "APTUSDT", 
-    "OPUSDT", "ARBUSDT", "LDOUSDT", "INJUSDT", "TIAUSDT", "SUIUSDT", "RENDERUSDT", 
-    "PEPEUSDT", "DOGEUSDT"
+PAIRS_TOP_30 = [
+    "BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "AVAX-USD", 
+    "DOT-USD", "LINK-USD", "LTC-USD", "BCH-USD", "UNI-USD", 
+    "ATOM-USD", "XLM-USD", "ETC-USD", "NEAR-USD", "ALGO-USD", 
+    "ICP-USD", "FIL-USD", "APT-USD", "OP-USD", "ARB-USD", 
+    "LDO-USD", "INJ-USD", "TIA-USD", "SUI-USD", "RENDER-USD", 
+    "PEPE-USD", "DOGE-USD", "FET-USD", "AAVE-USD", "SHIB-USD"
 ]
 
 def load_config():
@@ -33,19 +34,25 @@ def load_config():
     except FileNotFoundError:
         return default_config
 
-def fetch_data(symbol, interval, limit=100):
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+def fetch_data(symbol, interval):
+    granularity_map = {
+        "15m": 900,
+        "1h": 3600,
+        "4h": 14400,
+        "1d": 86400
+    }
+    granularity = granularity_map.get(interval, 900)
+    url = f"https://api.exchange.coinbase.com/products/{symbol}/candles?granularity={granularity}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+
     try:
-        res = requests.get(url, timeout=5)
+        res = requests.get(url, headers=headers, timeout=5)
         if res.status_code == 200:
             raw_data = res.json()
             if raw_data:
-                df = pd.DataFrame(raw_data, columns=[
-                    'timestamp', 'open', 'high', 'low', 'close', 'volume',
-                    'close_time', 'quote_asset_volume', 'number_of_trades',
-                    'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
-                ])
-                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                df = pd.DataFrame(raw_data, columns=['timestamp', 'low', 'high', 'open', 'close', 'volume'])
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+                df = df.sort_values('timestamp').reset_index(drop=True)
                 cols = ['open', 'high', 'low', 'close', 'volume']
                 df[cols] = df[cols].astype(float)
                 return df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
@@ -76,12 +83,13 @@ def calculate_indicators(df, config):
 def run_bot():
     config = load_config()
     print(f"🚀 Bot démarré le {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"🔄 Analyse en cours sur 30 cryptos ({config['timeframe']})...\n")
+    print(f"🔄 Analyse Coinbase en cours sur 30 cryptos ({config['timeframe']})...\n")
 
     signals_found = 0
 
-    for symbol in YOUHOLDER_TOP_30:
+    for symbol in PAIRS_TOP_30:
         df = fetch_data(symbol, config["timeframe"])
+        time.sleep(0.1)  # Petite pause pour respecter les requêtes Coinbase
 
         if df.empty or len(df) < config["rsi_period"]:
             continue

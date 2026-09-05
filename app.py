@@ -6,22 +6,24 @@ import requests
 import json
 import time
 
-st.set_page_config(page_title="Scanner YouHolder Multi-Paires", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Scanner YouHolder / Coinbase Multi-Paires", page_icon="📊", layout="wide")
 
-st.title("📊 Scanner & Analyse Trading - 30 Cryptos YouHolder")
+st.title("📊 Scanner & Analyse Trading - 30 Cryptos (Coinbase API)")
 
-YOUHOLDER_TOP_30 = [
-    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "AVAXUSDT", 
-    "DOTUSDT", "LINKUSDT", "POLUSDT", "LTCUSDT", "BCHUSDT", "UNIUSDT", "ATOMUSDT", 
-    "XLMUSDT", "ETCUSDT", "NEARUSDT", "ALGOUSDT", "ICPUSDT", "FILUSDT", "APTUSDT", 
-    "OPUSDT", "ARBUSDT", "LDOUSDT", "INJUSDT", "TIAUSDT", "SUIUSDT", "RENDERUSDT", 
-    "PEPEUSDT", "DOGEUSDT"
+# Top 30 cryptos disponibles sur Coinbase / YouHolder en paires USD
+PAIRS_TOP_30 = [
+    "BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "AVAX-USD", 
+    "DOT-USD", "LINK-USD", "LTC-USD", "BCH-USD", "UNI-USD", 
+    "ATOM-USD", "XLM-USD", "ETC-USD", "NEAR-USD", "ALGO-USD", 
+    "ICP-USD", "FIL-USD", "APT-USD", "OP-USD", "ARB-USD", 
+    "LDO-USD", "INJ-USD", "TIA-USD", "SUI-USD", "RENDER-USD", 
+    "PEPE-USD", "DOGE-USD", "FET-USD", "AAVE-USD", "SHIB-USD"
 ]
 
 # --- PARAMÈTRES GLOBAUX ---
 st.sidebar.header("⚙️ Configuration Globale")
 
-capital_initial = st.sidebar.number_input("Capital YouHolder Total ($)", min_value=10.0, value=1000.0, step=50.0)
+capital_initial = st.sidebar.number_input("Capital Total ($)", min_value=10.0, value=1000.0, step=50.0)
 risque_pct = st.sidebar.slider("Risque par trade (%)", 0.5, 5.0, 1.0, 0.5)
 montant_risque = capital_initial * (risque_pct / 100)
 st.sidebar.info(f"💵 Risque max par trade : **${montant_risque:.2f}**")
@@ -82,24 +84,30 @@ st.sidebar.download_button(
     use_container_width=True
 )
 
-def fetch_data(symbol, interval, limit=100):
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+def fetch_data(symbol, interval):
+    # Mapping des intervalles pour Coinbase (en secondes)
+    granularity_map = {
+        "15m": 900,
+        "1h": 3600,
+        "4h": 14400,
+        "1d": 86400
+    }
+    granularity = granularity_map.get(interval, 900)
+    url = f"https://api.exchange.coinbase.com/products/{symbol}/candles?granularity={granularity}"
+    headers = {"User-Agent": "Mozilla/5.0"}
     
     try:
-        res = requests.get(url, timeout=5)
+        res = requests.get(url, headers=headers, timeout=5)
         if res.status_code == 200:
             raw_data = res.json()
             if raw_data:
-                df = pd.DataFrame(raw_data, columns=[
-                    'timestamp', 'open', 'high', 'low', 'close', 'volume',
-                    'close_time', 'quote_asset_volume', 'number_of_trades',
-                    'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
-                ])
+                # Structure Coinbase : [time, low, high, open, close, volume]
+                df = pd.DataFrame(raw_data, columns=['timestamp', 'low', 'high', 'open', 'close', 'volume'])
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+                df = df.sort_values('timestamp').reset_index(drop=True)
                 
-                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
                 cols = ['open', 'high', 'low', 'close', 'volume']
                 df[cols] = df[cols].astype(float)
-                
                 return df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
     except Exception as e:
         st.error(f"Erreur d'accès réseau pour {symbol} : {e}")
@@ -111,8 +119,9 @@ if st.button("▶️ Lancer le Scan Complet (30 Cryptos)", type="primary", use_c
     results = []
     progress_bar = st.progress(0)
     
-    for idx, sym in enumerate(YOUHOLDER_TOP_30):
+    for idx, sym in enumerate(PAIRS_TOP_30):
         df = fetch_data(sym, timeframe)
+        time.sleep(0.1)  # Petite pause pour respecter les limites de débit
         
         if not df.empty and len(df) >= 14:
             delta = df['close'].diff()
@@ -153,7 +162,7 @@ if st.button("▶️ Lancer le Scan Complet (30 Cryptos)", type="primary", use_c
                 "Take Profit": f"${tp_p:,.4f}",
                 "Stop Loss": f"${sl_p:,.4f}"
             })
-        progress_bar.progress((idx + 1) / len(YOUHOLDER_TOP_30))
+        progress_bar.progress((idx + 1) / len(PAIRS_TOP_30))
 
     st.success("Scan complet terminé !")
     if results:
@@ -165,7 +174,7 @@ st.markdown("---")
 
 # --- 2. EXAMEN DÉTAILLÉ D'UNE CRYPTO SÉLECTIONNÉE ---
 st.subheader("🔎 Visualisation détaillée par Crypto")
-selected_symbol = st.selectbox("Sélectionner une crypto à examiner", YOUHOLDER_TOP_30, index=0)
+selected_symbol = st.selectbox("Sélectionner une crypto à examiner", PAIRS_TOP_30, index=0)
 
 df_single = fetch_data(selected_symbol, timeframe)
 
