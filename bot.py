@@ -38,7 +38,7 @@ if os.path.exists(CONFIG_FILE):
             config = json.load(f)
         print(f"⚙️ Configuration chargée depuis {CONFIG_FILE}")
     except Exception as e:
-        print(f"⚠️ Erreur de lecture de {CONFIG_FILE}, utilisation de la config par défaut: {e}")
+        print(f"⚠️ Erreur de lecture de {CONFIG_FILE}, utilisation de la config par défaut : {e}")
         config = default_config
 else:
     config = default_config
@@ -49,49 +49,42 @@ RISQUE_PCT = config.get("risque_pct", 1.0)
 TYPE_SL_TP = config.get("type_sl_tp", "Pourcentage Fixe")
 
 def get_klines(symbol, interval, limit=100):
-    # 1. Binance Direct & Binance US
-    endpoints = [
-        f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}",
-        f"https://api.binance.us/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    ]
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0",
-        "Accept": "application/json"
-    }
+    coin = symbol.replace("USDT", "")
+    granularity_map = {"15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
+    granularity = granularity_map.get(interval, 900)
     
-    for url in endpoints:
-        try:
-            response = requests.get(url, headers=headers, timeout=5)
-            if response.status_code == 200:
-                data = response.json()
-                if isinstance(data, list) and len(data) > 0:
-                    df = pd.DataFrame(data, columns=[
-                        'timestamp', 'open', 'high', 'low', 'close', 'volume',
-                        'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'
-                    ])
-                    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                    for col in ['open', 'high', 'low', 'close', 'volume']:
-                        df[col] = df[col].astype(float)
-                    return df
-        except Exception:
-            continue
-
-    # 2. Secours CryptoCompare (si Binance bloque l'IP)
+    # 1. API Coinbase (Ultra-stable et non restreinte)
     try:
-        coin = symbol.replace("USDT", "")
-        hist_type = "histominute" if interval in ["15m"] else "histohour" if interval in ["1h", "4h"] else "histoday"
-        agg = 15 if interval == "15m" else 4 if interval == "4h" else 1
-        
-        cc_url = f"https://min-api.cryptocompare.com/data/v2/{hist_type}?fsym={coin}&tsym=USDT&limit={limit}&aggregate={agg}"
-        res = requests.get(cc_url, timeout=5)
+        url = f"https://api.exchange.coinbase.com/products/{coin}-USD/candles?granularity={granularity}"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        res = requests.get(url, headers=headers, timeout=5)
         if res.status_code == 200:
-            json_res = res.json()
-            if json_res.get("Response") == "Success":
-                raw_data = json_res["Data"]["Data"]
-                df = pd.DataFrame(raw_data)
-                df.rename(columns={'time': 'timestamp', 'volumeto': 'volume'}, inplace=True)
+            data = res.json()
+            if isinstance(data, list) and len(data) > 0:
+                df = pd.DataFrame(data, columns=['timestamp', 'low', 'high', 'open', 'close', 'volume'])
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
-                return df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
+                df = df.sort_values('timestamp').reset_index(drop=True)
+                for col in ['open', 'high', 'low', 'close', 'volume']:
+                    df[col] = df[col].astype(float)
+                return df.tail(limit)
+    except Exception:
+        pass
+
+    # 2. Secours Binance US
+    try:
+        url = f"https://api.binance.us/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+        res = requests.get(url, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            if isinstance(data, list) and len(data) > 0:
+                df = pd.DataFrame(data, columns=[
+                    'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                    'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'
+                ])
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                for col in ['open', 'high', 'low', 'close', 'volume']:
+                    df[col] = df[col].astype(float)
+                return df
     except Exception:
         pass
 
