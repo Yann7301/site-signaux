@@ -1,94 +1,102 @@
-import os
+import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import streamlit as st
-import ccxt
+import requests
 import resend
 
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(
-    page_title="Scanner Crypto & Position Sizing",
-    page_icon="📈",
+    page_title="Scanner & Analyse Trading Crypto",
+    page_icon="📊",
     layout="wide"
 )
 
-st.title("📈 Scanner Crypto Multi-Indicateurs & Risk Management")
+st.title("📊 Scanner & Analyse Trading Crypto")
 
-# --- BARRE LATÉRALE : PARAMÈTRES ET GESTION DU RISQUE ---
-st.sidebar.header("⚙️ Gestion du Risque")
-capital_total = st.sidebar.number_input("Capital Total ($)", min_value=50.0, value=1000.0, step=50.0)
-risque_pct = st.sidebar.slider("Risque par trade (%)", min_value=0.5, max_value=5.0, value=1.0, step=0.5)
+# ==========================================
+# ⚙️ PANNEAU DE CONFIGURATION DYNAMIQUE
+# ==========================================
+st.sidebar.header("⚙️ Configuration du Capital & Risque")
 
-st.sidebar.header("🔍 Configuration du Scanner")
-symboles_defaut = ["BTC/USD", "ETH/USD", "SOL/USD", "AVAX/USD", "ADA/USD"]
-symboles_choisis = st.sidebar.multiselect("Paires à scanner", symboles_defaut, default=symboles_defaut)
-timeframe = st.sidebar.selectbox("Horizon de temps (Timeframe)", ["1h", "4h", "1d"], index=0)
+# 1. Gestion du Capital
+capital_initial = st.sidebar.number_input(
+    "Solde / Capital ($)", 
+    min_value=10.0, 
+    value=1000.0, 
+    step=50.0
+)
 
-# --- FONCTION TEST EMAIL ---
-def envoyer_email_test():
-    """Envoie un mail de test immédiat via l'API Resend pour vérifier les secrets."""
-    api_key = st.secrets.get("RESEND_API_KEY")
-    to_email = st.secrets.get("TO_EMAIL")
+risque_pct = st.sidebar.slider(
+    "Risque par trade (%)", 
+    min_value=0.5, 
+    max_value=5.0, 
+    value=1.0, 
+    step=0.5
+)
 
-    if not api_key or not to_email:
-        st.sidebar.error("⚠️ Secrets RESEND_API_KEY ou TO_EMAIL manquants.")
-        return False
+montant_risque = capital_initial * (risque_pct / 100)
+st.sidebar.info(f"💵 Risque max par trade : **${montant_risque:.2f}**")
 
-    resend.api_key = api_key
+st.sidebar.markdown("---")
+st.sidebar.header("🎯 Niveaux TP / SL & Stratégie")
 
-    try:
-        resend.Emails.send({
-            "from": "Scanner Crypto <onboarding@resend.dev>",
-            "to": [to_email],
-            "subject": "🧪 Test de configuration Resend - Scanner Crypto",
-            "html": "<p>Ceci est un <b>email de test</b> envoyé depuis ton application Streamlit Cloud ! Ton integration Resend fonctionne parfaitement.</p>"
-        })
-        return True
-    except Exception as e:
-        st.sidebar.error(f"Erreur d'envoi : {e}")
-        return False
+type_sl_tp = st.sidebar.selectbox(
+    "Mode de calcul TP / SL", 
+    ["Pourcentage Fixe", "Dynamique (ATR)"]
+)
 
-# --- BOUTON DE TEST DANS LA SIDEBAR ---
-st.sidebar.header("📧 Test des Alertes")
-if st.sidebar.button("🧪 Tester l'envoi d'email"):
-    with st.sidebar.spinner("Envoi du mail de test..."):
-        if envoyer_email_test():
-            st.sidebar.success("✅ Mail de test envoyé avec succès !")
+if type_sl_tp == "Pourcentage Fixe":
+    stop_loss_pct = st.sidebar.slider("Stop Loss (%)", 0.5, 10.0, 2.0, 0.5)
+    take_profit_pct = st.sidebar.slider("Take Profit (%)", 1.0, 20.0, 4.0, 0.5)
+    rr_ratio = take_profit_pct / stop_loss_pct
+    st.sidebar.caption(f"📈 Ratio Risque/Rendement (R:R) : **1:{rr_ratio:.2f}**")
+else:
+    atr_period = st.sidebar.number_input("Période ATR", value=14, min_value=5, max_value=30)
+    atr_mult_sl = st.sidebar.slider("Multiplicateur SL (x ATR)", 1.0, 4.0, 1.5, 0.1)
+    atr_mult_tp = st.sidebar.slider("Multiplicateur TP (x ATR)", 1.0, 6.0, 3.0, 0.1)
+    rr_ratio = atr_mult_tp / atr_mult_sl
+    st.sidebar.caption(f"📈 Ratio Risque/Rendement (R:R) : **1:{rr_ratio:.2f}**")
 
-# --- FONCTIONS TECHNIQUES & CALCULS ---
+st.sidebar.markdown("---")
+st.sidebar.header("⏱️ Fréquence & Paire")
+
+symbol = st.sidebar.selectbox("Paire Crypto", ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"], index=0)
+timeframe = st.sidebar.selectbox("Unité de Temps (Timeframe)", ["15m", "1h", "4h", "1d"], index=1)
+
+# ==========================================
+# 📈 RÉCUPÉRATION DES DONNÉES & INDICATEURS
+# ==========================================
 
 @st.cache_data(ttl=300)
-def charger_donnees(symbol, timeframe, limit=100):
-    """Récupère les données OHLCV depuis Coinbase via CCXT."""
-    exchange = ccxt.coinbase()
-    ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
-    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-    return df
+def fetch_binance_data(symbol, interval, limit=100):
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    try:
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        df = pd.DataFrame(data, columns=[
+            'timestamp', 'open', 'high', 'low', 'close', 'volume',
+            'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'
+        ])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            df[col] = df[col].astype(float)
+        return df
+    except Exception as e:
+        st.error(f"Erreur lors de la récupération des données Binance : {e}")
+        return pd.DataFrame()
 
-def calculer_indicateurs(df):
-    """Calcule le RSI, le MACD, les Bandes de Bollinger et l'ATR."""
-    # RSI (14)
+df = fetch_binance_data(symbol, timeframe)
+
+if not df.empty:
+    # Calcul RSI (14)
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
 
-    # MACD (12, 26, 9)
-    exp1 = df['close'].ewm(span=12, adjust=False).mean()
-    exp2 = df['close'].ewm(span=26, adjust=False).mean()
-    df['MACD'] = exp1 - exp2
-    df['Signal_MACD'] = df['MACD'].ewm(span=9, adjust=False).mean()
-
-    # Bandes de Bollinger (20, 2)
-    df['SMA20'] = df['close'].rolling(window=20).mean()
-    df['STD20'] = df['close'].rolling(window=20).std()
-    df['Bollinger_Upper'] = df['SMA20'] + (df['STD20'] * 2)
-    df['Bollinger_Lower'] = df['SMA20'] - (df['STD20'] * 2)
-
-    # ATR (14)
+    # Calcul ATR (14)
     high_low = df['high'] - df['low']
     high_close = np.abs(df['high'] - df['close'].shift())
     low_close = np.abs(df['low'] - df['close'].shift())
@@ -96,140 +104,101 @@ def calculer_indicateurs(df):
     true_range = np.max(ranges, axis=1)
     df['ATR'] = true_range.rolling(14).mean()
 
-    return df
+    # Prix actuel
+    current_price = df['close'].iloc[-1]
+    current_rsi = df['RSI'].iloc[-1]
+    current_atr = df['ATR'].iloc[-1]
 
-def analyser_signal(df):
-    """Détecte les signaux ACHAT ou VENTE selon les indicateurs."""
-    derniere_ligne = df.iloc[-1]
+    # Calcul dynamique TP / SL
+    if type_sl_tp == "Pourcentage Fixe":
+        sl_price_buy = current_price * (1 - stop_loss_pct / 100)
+        tp_price_buy = current_price * (1 + take_profit_pct / 100)
+        sl_dist = current_price - sl_price_buy
+    else:
+        sl_dist = current_atr * atr_mult_sl
+        sl_price_buy = current_price - sl_dist
+        tp_price_buy = current_price + (current_atr * atr_mult_tp)
 
-    rsi = derniere_ligne['RSI']
-    macd = derniere_ligne['MACD']
-    signal_macd = derniere_ligne['Signal_MACD']
-    close = derniere_ligne['close']
-    bollinger_lower = derniere_ligne['Bollinger_Lower']
-    bollinger_upper = derniere_ligne['Bollinger_Upper']
-    atr = derniere_ligne['ATR']
+    # Calcul Position Sizing
+    position_size_btc = montant_risque / sl_dist if sl_dist > 0 else 0
+    position_size_usd = position_size_btc * current_price
 
+    # Détection de signal basique
     signal = "NEUTRE"
+    if current_rsi < 30:
+        signal = "ACHAT (Oversold)"
+    elif current_rsi > 70:
+        signal = "VENTE (Overbought)"
 
-    # Condition d'ACHAT : RSI survendu (< 40), croisement MACD haussier, prix proche bas Bollinger
-    if rsi < 40 and macd > signal_macd and close <= bollinger_lower * 1.01:
-        signal = "ACHAT"
-        sl = close - (1.5 * atr)
-        tp = close + (3.0 * atr)
-    # Condition de VENTE : RSI suracheté (> 60), croisement MACD baissier, prix proche haut Bollinger
-    elif rsi > 60 and macd < signal_macd and close >= bollinger_upper * 0.99:
-        signal = "VENTE"
-        sl = close + (1.5 * atr)
-        tp = close - (3.0 * atr)
-    else:
-        sl = 0.0
-        tp = 0.0
+    # ==========================================
+    # 📊 AFFICHAGE DES MÉTRIQUES
+    # ==========================================
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Prix Actuel", f"${current_price:,.2f}")
+    m2.metric("Signal RSI", f"{current_rsi:.1f}", delta=signal)
+    m3.metric("Take Profit (TP)", f"${tp_price_buy:,.2f}")
+    m4.metric("Stop Loss (SL)", f"${sl_price_buy:,.2f}")
 
-    return signal, close, sl, tp, atr
+    st.markdown("---")
 
-def calculer_taille_position(capital, risque_pct, prix_entree, stop_loss):
-    """Calcule le montant en $ à investir pour respecter le risque choisi."""
-    distance_sl_pct = abs(prix_entree - stop_loss) / prix_entree
-    if distance_sl_pct == 0:
-        return 0.0, 0.0
+    col_chart, col_summary = st.columns([2, 1])
 
-    montant_risque_usd = capital * (risque_pct / 100.0)
-    position_usd = montant_risque_usd / distance_sl_pct
-    return round(position_usd, 2), round(montant_risque_usd, 2)
+    with col_chart:
+        st.subheader(f"Graphique {symbol} ({timeframe})")
+        fig = go.Figure(data=[go.Candlestick(
+            x=df['timestamp'],
+            open=df['open'],
+            high=df['high'],
+            low=df['low'],
+            close=df['close'],
+            name="Prix"
+        )])
+        # Lignes TP et SL
+        fig.add_hline(y=tp_price_buy, line_dash="dash", line_color="green", annotation_text="TP")
+        fig.add_hline(y=sl_price_buy, line_dash="dash", line_color="red", annotation_text="SL")
+        fig.update_layout(height=400, margin=dict(l=20, r=20, t=20, b=20))
+        st.plotly_chart(fig, use_container_width=True)
 
-def envoyer_email_alerte(symbol, signal_type, prix, sl, tp, pos_usd, risque_usd):
-    """Envoie un mail formaté via l'API Resend."""
-    api_key = st.secrets.get("RESEND_API_KEY")
-    to_email = st.secrets.get("TO_EMAIL")
+    with col_summary:
+        st.subheader("📋 Récapitulatif du Trade")
+        st.write(f"**Capital total :** `${capital_initial:,.2f}`")
+        st.write(f"**Risque engagé ({risque_pct}%) :** `${montant_risque:,.2f}`")
+        st.write(f"**Taille de position suggérée :** `{position_size_btc:.4f}` unités (`${position_size_usd:,.2f}`)")
+        st.write(f"**Niveau TP :** `${tp_price_buy:,.2f}`")
+        st.write(f"**Niveau SL :** `${sl_price_buy:,.2f}`")
+        st.write(f"**Ratio Risque/Rendement :** `1:{rr_ratio:.2f}`")
 
-    if not api_key or not to_email:
-        st.error("⚠️ Secrets RESEND_API_KEY ou TO_EMAIL manquants dans Streamlit Cloud.")
-        return False
+        st.markdown("---")
 
-    resend.api_key = api_key
+        # Bouton de test d'envoi d'alerte email
+        if st.button("📧 Envoyer une alerte de test par email", use_container_width=True):
+            api_key = st.secrets.get("RESEND_API_KEY")
+            to_email = st.secrets.get("TO_EMAIL")
 
-    contenu_html = f"""
-    <h2>🚨 Signal Crypto : {signal_type} sur {symbol}</h2>
-    <p>Un nouveau signal vient d'être identifié par le scanner.</p>
-    <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; font-family: Arial, sans-serif;">
-      <tr><td><b>Paire</b></td><td>{symbol}</td></tr>
-      <tr><td><b>Signal</b></td><td><b>{signal_type}</b></td></tr>
-      <tr><td><b>Prix d'entrée</b></td><td>${prix:,.2f}</td></tr>
-      <tr><td><b>Stop-Loss (SL)</b></td><td>${sl:,.2f}</td></tr>
-      <tr><td><b>Take-Profit (TP)</b></td><td>${tp:,.2f}</td></tr>
-      <tr style="background-color: #f2f2f2;">
-        <td><b>Taille de position suggérée</b></td>
-        <td><b>${pos_usd:,.2f}</b></td>
-      </tr>
-      <tr style="background-color: #ffe6e6;">
-        <td><b>Risque ($)</b></td>
-        <td><b>${risque_usd:,.2f}</b></td>
-      </tr>
-    </table>
-    <p><small>Message automatisé de ton scanner Streamlit Cloud.</small></p>
-    """
+            if not api_key or not to_email:
+                st.error("⚠️ Secrets RESEND_API_KEY ou TO_EMAIL non configurés.")
+            else:
+                resend.api_key = api_key
+                html_msg = f"""
+                <h3>🔔 ALERTE TRADING : {symbol} ({timeframe})</h3>
+                <p><b>Signal :</b> {signal}</p>
+                <p><b>Prix :</b> ${current_price:,.2f}</p>
+                <p><b>Take Profit :</b> ${tp_price_buy:,.2f}</p>
+                <p><b>Stop Loss :</b> ${sl_price_buy:,.2f}</p>
+                <p><b>Taille Position :</b> ${position_size_usd:,.2f} (Risque ${montant_risque:,.2f})</p>
+                """
+                try:
+                    resend.Emails.send({
+                        "from": "Alerte Trading <onboarding@resend.dev>",
+                        "to": [to_email],
+                        "subject": f"🚨 SIGNAL TRADING {symbol} - {signal}",
+                        "html": html_msg
+                    })
+                    st.success("Email d'alerte envoyé avec succès !")
+                except Exception as e:
+                    st.error(f"Erreur d'envoi : {e}")
 
-    try:
-        resend.Emails.send({
-            "from": "Scanner Crypto <onboarding@resend.dev>",
-            "to": [to_email],
-            "subject": f"[{signal_type}] {symbol} - Taille position : ${pos_usd:,.0f}",
-            "html": contenu_html
-        })
-        return True
-    except Exception as e:
-        st.error(f"Erreur d'envoi mail : {e}")
-        return False
-
-# --- EXÉCUTION DU SCANNER ---
-
-if st.button("🚀 Lancer le balayage du marché"):
-    resultats = []
-
-    for symbol in symboles_choisis:
-        try:
-            df = charger_donnees(symbol, timeframe)
-            df = calculer_indicateurs(df)
-            signal, prix, sl, tp, atr = analyser_signal(df)
-
-            if signal in ["ACHAT", "VENTE"]:
-                pos_usd, risque_usd = calculer_taille_position(capital_total, risque_pct, prix, sl)
-
-                # Envoi de l'alerte mail
-                mail_envoye = envoyer_email_alerte(symbol, signal, prix, sl, tp, pos_usd, risque_usd)
-
-                resultats.append({
-                    "Paire": symbol,
-                    "Signal": signal,
-                    "Prix ($)": f"${prix:,.2f}",
-                    "Stop-Loss ($)": f"${sl:,.2f}",
-                    "Take-Profit ($)": f"${tp:,.2f}",
-                    "Position ($)": f"${pos_usd:,.2f}",
-                    "Risque ($)": f"${risque_usd:,.2f}",
-                    "Email": "Envoyé 📧" if mail_envoye else "Échec ❌"
-                })
-
-                # Affichage graphique pour les paires avec signal
-                st.subheader(f"📊 Graphique : {symbol} ({signal})")
-                fig = go.Figure(data=[go.Candlestick(
-                    x=df['timestamp'],
-                    open=df['open'], high=df['high'],
-                    low=df['low'], close=df['close'],
-                    name="Prix"
-                )])
-                fig.add_hline(y=sl, line_dash="dash", line_color="red", annotation_text="Stop-Loss")
-                fig.add_hline(y=tp, line_dash="dash", line_color="green", annotation_text="Take-Profit")
-                fig.update_layout(xaxis_rangeslider_visible=False, template="plotly_dark", height=400)
-                st.plotly_chart(fig, use_container_width=True)
-
-        except Exception as e:
-            st.error(f"Erreur lors de l'analyse de {symbol} : {e}")
-
-    # Résumé des signaux
-    if resultats:
-        st.success(f"Détéction terminée : {len(resultats)} signal(s) trouvé(s) !")
-        st.table(pd.DataFrame(resultats))
-    else:
-        st.info("Aucun signal fort détecté sur le marché actuellement.")
+# ==========================================
+# 🚀 MISE À JOUR DANS GIT
+# ==========================================
 
