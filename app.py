@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import resend
 
 # ==========================================
 # 1. CONFIGURATION DE LA PAGE
@@ -20,7 +21,43 @@ st.title("📈 Crypto Market Scanner & Candlestick Charts")
 st.caption("Analyse en temps réel via l'API Coinbase — Graphiques interactifs Candlesticks & RSI")
 
 # ==========================================
-# 2. BARRE LATÉRALE DE CONFIGURATION
+# 2. FONCTION D'ENVOI D'EMAIL
+# ==========================================
+def send_signal_email(symbol, signal_type, price, rsi, sl, tp):
+    if "RESEND_API_KEY" not in st.secrets or "TO_EMAIL" not in st.secrets:
+        st.warning("⚠️ Secrets RESEND_API_KEY ou TO_EMAIL manquants dans Streamlit Cloud.")
+        return False
+    
+    try:
+        resend.api_key = st.secrets["RESEND_API_KEY"]
+        
+        subject = f"🚨 SIGNAL CRYPTO : {signal_type} sur {symbol} (${price:,})"
+        
+        body = f"""
+        <h3>Alerte Détectée sur {symbol}</h3>
+        <ul>
+            <li><b>Action :</b> {signal_type}</li>
+            <li><b>Prix actuel :</b> ${price:,}</li>
+            <li><b>RSI :</b> {rsi}</li>
+            <li><b>Stop-Loss (SL) :</b> ${sl}</li>
+            <li><b>Take-Profit (TP) :</b> ${tp}</li>
+        </ul>
+        <p><i>Message envoyé automatiquement par votre scanner Streamlit.</i></p>
+        """
+        
+        resend.Emails.send({
+            "from": "CryptoAlerts <onboarding@resend.dev>",
+            "to": [st.secrets["TO_EMAIL"]],
+            "subject": subject,
+            "html": body
+        })
+        return True
+    except Exception as e:
+        st.error(f"Erreur d'envoi de l'email : {e}")
+        return False
+
+# ==========================================
+# 3. BARRE LATÉRALE DE CONFIGURATION
 # ==========================================
 st.sidebar.header("⚙️ Paramètres")
 
@@ -46,7 +83,7 @@ atr_sl_mult = st.sidebar.slider("Multiplicateur Stop-Loss (ATR)", 1.0, 3.0, 1.5,
 atr_tp_mult = st.sidebar.slider("Multiplicateur Take-Profit (ATR)", 1.5, 5.0, 3.0, 0.1)
 
 # ==========================================
-# 3. CALCULS INDICATEURS (PURE PYTHON)
+# 4. CALCULS INDICATEURS (PURE PYTHON)
 # ==========================================
 def calculate_sma(data, period):
     if len(data) < period:
@@ -139,7 +176,7 @@ def calculate_atr(candles, period=14):
     return atr
 
 # ==========================================
-# 4. MOTEUR D'ANALYSE ET RÉCUPÉRATION
+# 5. MOTEUR D'ANALYSE ET RÉCUPÉRATION
 # ==========================================
 @st.cache_data(ttl=60)
 def fetch_symbol_data(symbol, gran):
@@ -216,7 +253,10 @@ def fetch_symbol_data(symbol, gran):
                 "upper_bb": upper_bb,
                 "lower_bb": lower_bb,
                 "sma20": sma20,
-                "rsi": [None] * (len(closes) - len(rsi_vals)) + rsi_vals
+                "rsi": [None] * (len(closes) - len(rsi_vals)) + rsi_vals,
+                "sl": sl,
+                "tp": tp,
+                "signal": signal_type
             }
         }
     except Exception as e:
@@ -224,8 +264,11 @@ def fetch_symbol_data(symbol, gran):
         return None
 
 # ==========================================
-# 5. EXECUTION ET CALCULS
+# 6. EXECUTION ET GESTION DES EMAILS
 # ==========================================
+if "sent_alerts" not in st.session_state:
+    st.session_state["sent_alerts"] = set()
+
 if st.button("🔄 Rafraîchir les données"):
     st.cache_data.clear()
 
@@ -237,20 +280,36 @@ with st.spinner("Analyse du marché et génération des graphiques..."):
     for sym in selected_symbols:
         res = fetch_symbol_data(sym, granularity)
         if res:
-            results.append(res["summary"])
+            summary = res["summary"]
+            results.append(summary)
             charts_data[sym] = res["history"]
-            if res["summary"]["Signal"] in ["ACHAT", "VENTE"]:
-                signals.append(res["summary"])
+            
+            sig = summary["Signal"]
+            if sig in ["ACHAT", "VENTE"]:
+                signals.append(summary)
+                
+                alert_key = f"{sym}_{sig}_{summary['Prix ($)']}"
+                if alert_key not in st.session_state["sent_alerts"]:
+                    sent = send_signal_email(
+                        symbol=sym,
+                        signal_type=sig,
+                        price=summary["Prix ($)"],
+                        rsi=summary["RSI"],
+                        sl=summary["Stop-Loss ($)"],
+                        tp=summary["Take-Profit ($)"]
+                    )
+                    if sent:
+                        st.session_state["sent_alerts"].add(alert_key)
 
 # ==========================================
-# 6. AFFICHAGE DE L'INTERFACE
+# 7. AFFICHAGE DE L'INTERFACE
 # ==========================================
 
 # Section 1 : Alerte Signaux
 if signals:
     st.subheader("🚀 Signaux Détectés")
     for sig in signals:
-        st.success(f"**{sig['Paire']}** — Signal **{sig['Signal']}** détecté au prix de **${sig['Prix ($)']:,}**")
+        st.success(f"**{sig['Paire']}** — Signal **{sig['Signal']}** détecté au prix de **${sig['Prix ($)']:,}** (Alerte email envoyée 📧)")
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Prix d'entrée", f"${sig['Prix ($)']:,}")
         col2.metric("RSI", sig["RSI"])
@@ -272,11 +331,10 @@ if results:
             return 'background-color: rgba(255, 0, 0, 0.2); font-weight: bold;'
         return ''
 
-    # Utilisation de .map() au lieu de .applymap() pour compatibilité Pandas
     styled_df = df.style.map(highlight_signal, subset=['Signal'])
     st.dataframe(styled_df, use_container_width=True, height=250)
 
-# Section 3 : Graphiques interactifs Plotly avec Chandeliers Japonais
+# Section 3 : Graphiques interactifs Plotly
 st.subheader("📈 Graphiques détaillés (Chandeliers Japonais, Bollinger & RSI)")
 
 if charts_data:
@@ -323,7 +381,18 @@ if charts_data:
         line=dict(color='#FFD700', width=1)
     ), row=1, col=1)
 
-    # 3. RSI
+    # 3. Lignes Stop-Loss et Take-Profit si signal actif
+    if hist["sl"] and hist["tp"]:
+        fig.add_hline(
+            y=hist["sl"], line_dash="dash", line_color="#FF3333", line_width=2,
+            row=1, col=1, annotation_text=f"Stop-Loss (${hist['sl']:.4f})", annotation_position="top left"
+        )
+        fig.add_hline(
+            y=hist["tp"], line_dash="dash", line_color="#00FF66", line_width=2,
+            row=1, col=1, annotation_text=f"Take-Profit (${hist['tp']:.4f})", annotation_position="bottom left"
+        )
+
+    # 4. RSI
     fig.add_trace(go.Scatter(
         x=hist["timestamps"], y=hist["rsi"],
         mode='lines', name='RSI (14)',
