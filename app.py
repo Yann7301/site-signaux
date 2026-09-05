@@ -10,14 +10,12 @@ st.set_page_config(page_title="Scanner YouHolder Multi-Paires", page_icon="📊"
 
 st.title("📊 Scanner & Analyse Trading - 30 Cryptos YouHolder")
 
-# Liste des 30 cryptos avec symboles Binance valides (POL & RENDER à la place de MATIC & RNDR)
 YOUHOLDER_TOP_30 = [
-    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
-    "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT", "POLUSDT",
-    "LTCUSDT", "BCHUSDT", "UNIUSDT", "ATOMUSDT", "XLMUSDT",
-    "ETCUSDT", "NEARUSDT", "ALGOUSDT", "ICPUSDT", "FILUSDT",
-    "APTUSDT", "OPUSDT", "ARBUSDT", "LDOUSDT", "INJUSDT",
-    "TIAUSDT", "SUIUSDT", "RENDERUSDT", "PEPEUSDT", "DOGEUSDT"
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "AVAXUSDT", 
+    "DOTUSDT", "LINKUSDT", "POLUSDT", "LTCUSDT", "BCHUSDT", "UNIUSDT", "ATOMUSDT", 
+    "XLMUSDT", "ETCUSDT", "NEARUSDT", "ALGOUSDT", "ICPUSDT", "FILUSDT", "APTUSDT", 
+    "OPUSDT", "ARBUSDT", "LDOUSDT", "INJUSDT", "TIAUSDT", "SUIUSDT", "RENDERUSDT", 
+    "PEPEUSDT", "DOGEUSDT"
 ]
 
 # --- PARAMÈTRES GLOBAUX ---
@@ -29,7 +27,7 @@ montant_risque = capital_initial * (risque_pct / 100)
 st.sidebar.info(f"💵 Risque max par trade : **${montant_risque:.2f}**")
 
 st.sidebar.markdown("---")
-st.sidebar.header("🎯 Stratégie TP / SL (Appliquée à toutes)")
+st.sidebar.header("🎯 Stratégie TP / SL")
 
 type_sl_tp = st.sidebar.selectbox("Mode de calcul TP / SL", ["Pourcentage Fixe", "Dynamique (ATR)"])
 
@@ -59,7 +57,6 @@ rsi_overbought = st.sidebar.slider("Seuil Vente (Suracheté)", 50, 80, 60)
 st.sidebar.markdown("---")
 timeframe = st.sidebar.selectbox("Unité de Temps Globale", ["15m", "1h", "4h", "1d"], index=0)
 
-# Export Configuration JSON pour bot.py
 config_data = {
     "timeframe": timeframe,
     "capital_initial": capital_initial,
@@ -87,38 +84,37 @@ st.sidebar.download_button(
 
 def fetch_data(symbol, interval, limit=100):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-    }
+    
     try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code != 200:
-            return pd.DataFrame()
+        res = requests.get(url, timeout=5)
+        if res.status_code == 200:
+            raw_data = res.json()
+            if raw_data:
+                df = pd.DataFrame(raw_data, columns=[
+                    'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                    'close_time', 'quote_asset_volume', 'number_of_trades',
+                    'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
+                ])
+                
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                cols = ['open', 'high', 'low', 'close', 'volume']
+                df[cols] = df[cols].astype(float)
+                
+                return df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
+    except Exception as e:
+        st.error(f"Erreur d'accès réseau pour {symbol} : {e}")
 
-        data = response.json()
-        if not isinstance(data, list) or len(data) == 0:
-            return pd.DataFrame()
-
-        df = pd.DataFrame(data, columns=[
-            'timestamp', 'open', 'high', 'low', 'close', 'volume',
-            'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'
-        ])
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        for col in ['open', 'high', 'low', 'close', 'volume']:
-            df[col] = df[col].astype(float)
-        return df
-    except Exception:
-        return pd.DataFrame()
+    return pd.DataFrame()
 
 # --- 1. OPTION DE SCAN GLOBAL ---
 if st.button("▶️ Lancer le Scan Complet (30 Cryptos)", type="primary", use_container_width=True):
     results = []
     progress_bar = st.progress(0)
+    
     for idx, sym in enumerate(YOUHOLDER_TOP_30):
         df = fetch_data(sym, timeframe)
-        time.sleep(0.1)  # Délai anti rate-limit
-
-        if not df.empty and len(df) >= 30:
+        
+        if not df.empty and len(df) >= 14:
             delta = df['close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -134,7 +130,7 @@ if st.button("▶️ Lancer le Scan Complet (30 Cryptos)", type="primary", use_c
 
             price = df['close'].iloc[-1]
             rsi = df['RSI'].iloc[-1]
-            atr = df['ATR'].iloc[-1]
+            atr = df['ATR'].iloc[-1] if not pd.isna(df['ATR'].iloc[-1]) else 0
 
             if type_sl_tp == "Pourcentage Fixe":
                 sl_p = price * (1 - stop_loss_pct / 100)
@@ -152,7 +148,7 @@ if st.button("▶️ Lancer le Scan Complet (30 Cryptos)", type="primary", use_c
             results.append({
                 "Crypto": sym,
                 "Prix": f"${price:,.4f}",
-                "RSI (14)": f"{rsi:.1f}",
+                "RSI (14)": f"{rsi:.1f}" if not pd.isna(rsi) else "N/A",
                 "Signal": sig,
                 "Take Profit": f"${tp_p:,.4f}",
                 "Stop Loss": f"${sl_p:,.4f}"
@@ -160,7 +156,10 @@ if st.button("▶️ Lancer le Scan Complet (30 Cryptos)", type="primary", use_c
         progress_bar.progress((idx + 1) / len(YOUHOLDER_TOP_30))
 
     st.success("Scan complet terminé !")
-    st.dataframe(pd.DataFrame(results), use_container_width=True)
+    if results:
+        st.dataframe(pd.DataFrame(results), use_container_width=True)
+    else:
+        st.warning("Aucune donnée disponible actuellement.")
 
 st.markdown("---")
 
@@ -170,15 +169,13 @@ selected_symbol = st.selectbox("Sélectionner une crypto à examiner", YOUHOLDER
 
 df_single = fetch_data(selected_symbol, timeframe)
 
-if not df_single.empty and len(df_single) >= 30:
-    # Calcul RSI
+if not df_single.empty and len(df_single) >= 14:
     delta = df_single['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     df_single['RSI'] = 100 - (100 / (1 + rs))
 
-    # Calcul ATR
     high_low = df_single['high'] - df_single['low']
     high_close = np.abs(df_single['high'] - df_single['close'].shift())
     low_close = np.abs(df_single['low'] - df_single['close'].shift())
@@ -188,7 +185,7 @@ if not df_single.empty and len(df_single) >= 30:
 
     curr_price = df_single['close'].iloc[-1]
     curr_rsi = df_single['RSI'].iloc[-1]
-    curr_atr = df_single['ATR'].iloc[-1]
+    curr_atr = df_single['ATR'].iloc[-1] if not pd.isna(df_single['ATR'].iloc[-1]) else 0
 
     if type_sl_tp == "Pourcentage Fixe":
         sl_val = curr_price * (1 - stop_loss_pct / 100)
@@ -197,14 +194,12 @@ if not df_single.empty and len(df_single) >= 30:
         sl_val = curr_price - (curr_atr * atr_mult_sl)
         tp_val = curr_price + (curr_atr * atr_mult_tp)
 
-    # Indicateurs Métriques
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Prix Actuel", f"${curr_price:,.4f}")
-    col2.metric("RSI (14)", f"{curr_rsi:.1f}")
+    col2.metric("RSI (14)", f"{curr_rsi:.1f}" if not pd.isna(curr_rsi) else "N/A")
     col3.metric("Take Profit Cible", f"${tp_val:,.4f}")
     col4.metric("Stop Loss Cible", f"${sl_val:,.4f}")
 
-    # Graphique Plotly
     fig = go.Figure()
     fig.add_trace(go.Candlestick(
         x=df_single['timestamp'],

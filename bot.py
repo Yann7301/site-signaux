@@ -5,19 +5,14 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 
-# --- DICTIONNAIRE DE MAPPING (Identique à app.py) ---
-YOUHOLDER_MAP = {
-    "BTCUSDT": "bitcoin", "ETHUSDT": "ethereum", "SOLUSDT": "solana", "BNBUSDT": "binancecoin",
-    "XRPUSDT": "ripple", "ADAUSDT": "cardano", "AVAXUSDT": "avalanche-2", "DOTUSDT": "polkadot",
-    "LINKUSDT": "chainlink", "POLUSDT": "polygon-ecosystem-token", "LTCUSDT": "litecoin",
-    "BCHUSDT": "bitcoin-cash", "UNIUSDT": "uniswap", "ATOMUSDT": "cosmos", "XLMUSDT": "stellar",
-    "ETCUSDT": "ethereum-classic", "NEARUSDT": "near", "ALGOUSDT": "algorand", "ICPUSDT": "internet-computer",
-    "FILUSDT": "filecoin", "APTUSDT": "aptos", "OPUSDT": "optimism", "ARBUSDT": "arbitrum",
-    "LDOUSDT": "lido-dao", "INJUSDT": "injective-protocol", "TIAUSDT": "celestia", "SUIUSDT": "sui",
-    "RENDERUSDT": "render-token", "PEPEUSDT": "pepe", "DOGEUSDT": "dogecoin"
-}
+YOUHOLDER_TOP_30 = [
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "AVAXUSDT", 
+    "DOTUSDT", "LINKUSDT", "POLUSDT", "LTCUSDT", "BCHUSDT", "UNIUSDT", "ATOMUSDT", 
+    "XLMUSDT", "ETCUSDT", "NEARUSDT", "ALGOUSDT", "ICPUSDT", "FILUSDT", "APTUSDT", 
+    "OPUSDT", "ARBUSDT", "LDOUSDT", "INJUSDT", "TIAUSDT", "SUIUSDT", "RENDERUSDT", 
+    "PEPEUSDT", "DOGEUSDT"
+]
 
-# --- CHARGEMENT DE LA CONFIGURATION ---
 def load_config():
     default_config = {
         "timeframe": "15m",
@@ -34,55 +29,41 @@ def load_config():
     }
     try:
         with open("config.json", "r") as f:
-            config = json.load(f)
-            print("⚙️ Configuration 'config.json' chargée avec succès.")
-            return config
+            return json.load(f)
     except FileNotFoundError:
-        print("⚠️ 'config.json' introuvable. Utilisation des paramètres par défaut.")
         return default_config
 
-# --- RÉCUPÉRATION DES DONNÉES DE MARCHÉ ---
-def fetch_data(symbol, interval):
-    coin_id = YOUHOLDER_MAP.get(symbol)
-    if not coin_id:
-        return pd.DataFrame()
-
-    days_map = {"15m": "1", "1h": "7", "4h": "14", "1d": "30"}
-    days = days_map.get(interval, "1")
-
-    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart?vs_currency=usd&days={days}"
-    headers = {"User-Agent": "Mozilla/5.0"}
-
+def fetch_data(symbol, interval, limit=100):
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
-        res = requests.get(url, headers=headers, timeout=10)
+        res = requests.get(url, timeout=5)
         if res.status_code == 200:
-            data = res.json()
-            prices = data.get("prices", [])
-            if prices:
-                df = pd.DataFrame(prices, columns=['timestamp', 'close'])
+            raw_data = res.json()
+            if raw_data:
+                df = pd.DataFrame(raw_data, columns=[
+                    'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                    'close_time', 'quote_asset_volume', 'number_of_trades',
+                    'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
+                ])
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                df['open'] = df['close'].shift(1).fillna(df['close'])
-                df['high'] = df[['open', 'close']].max(axis=1)
-                df['low'] = df[['open', 'close']].min(axis=1)
-                return df
+                cols = ['open', 'high', 'low', 'close', 'volume']
+                df[cols] = df[cols].astype(float)
+                return df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
     except Exception as e:
         print(f"❌ Erreur lors de la récupération de {symbol} : {e}")
 
     return pd.DataFrame()
 
-# --- CALCUL DES INDICATEURS ---
 def calculate_indicators(df, config):
     if len(df) < config["rsi_period"]:
         return df
 
-    # RSI
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=config["rsi_period"]).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=config["rsi_period"]).mean()
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
 
-    # ATR
     high_low = df['high'] - df['low']
     high_close = np.abs(df['high'] - df['close'].shift())
     low_close = np.abs(df['low'] - df['close'].shift())
@@ -92,17 +73,15 @@ def calculate_indicators(df, config):
 
     return df
 
-# --- BOUCLE PRINCIPALE DU BOT ---
 def run_bot():
     config = load_config()
     print(f"🚀 Bot démarré le {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"🔄 Analyse en cours sur 30 cryptos (Unité de temps : {config['timeframe']})...\n")
+    print(f"🔄 Analyse en cours sur 30 cryptos ({config['timeframe']})...\n")
 
     signals_found = 0
 
-    for symbol in YOUHOLDER_MAP.keys():
+    for symbol in YOUHOLDER_TOP_30:
         df = fetch_data(symbol, config["timeframe"])
-        time.sleep(0.2)  # Pause pour éviter d'atteindre les limites de requêtes de l'API
 
         if df.empty or len(df) < config["rsi_period"]:
             continue
@@ -116,7 +95,6 @@ def run_bot():
         if pd.isna(rsi):
             continue
 
-        # Calcul SL/TP
         if config["type_sl_tp"] == "Pourcentage Fixe":
             sl_price = price * (1 - config["stop_loss_pct"] / 100)
             tp_price = price * (1 + config["take_profit_pct"] / 100)
@@ -124,7 +102,6 @@ def run_bot():
             sl_price = price - (atr * config["atr_mult_sl"])
             tp_price = price + (atr * config["atr_mult_tp"])
 
-        # Analyse des opportunités
         if rsi < config["rsi_oversold"]:
             signals_found += 1
             print(f"🟢 [ACHAT] {symbol} | Prix: ${price:,.4f} | RSI: {rsi:.1f} | TP: ${tp_price:,.4f} | SL: ${sl_price:,.4f}")
@@ -135,7 +112,7 @@ def run_bot():
     if signals_found == 0:
         print("💤 Aucun signal détecté sur ce cycle.")
 
-    print(f"\n✅ Analyse terminée. Prochain scan dans 15 minutes.")
+    print(f"\n✅ Analyse terminée.")
 
 if __name__ == "__main__":
     run_bot()
