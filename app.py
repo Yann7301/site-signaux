@@ -266,7 +266,7 @@ if results:
             return 'background-color: rgba(255, 0, 0, 0.2); font-weight: bold;'
         return ''
 
-    styled_df = df.style.applymap(highlight_signal, subset=['Signal'])
+    styled_df = df.style.map(highlight_signal, subset=['Signal'])
     st.dataframe(styled_df, use_container_width=True, height=250)
 
 # Section 3 : Graphiques interactifs Plotly
