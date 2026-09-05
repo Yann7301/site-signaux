@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import requests
-import resend
 import json
 
 st.set_page_config(page_title="Scanner YouHolder Multi-Paires", page_icon="📊", layout="wide")
@@ -39,8 +38,8 @@ atr_mult_sl = None
 atr_mult_tp = None
 
 if type_sl_tp == "Pourcentage Fixe":
-    stop_loss_pct = st.sidebar.slider("Stop Loss (%)", 0.5, 10.0, 2.0, 0.5)
-    take_profit_pct = st.sidebar.slider("Take Profit (%)", 1.0, 20.0, 4.0, 0.5)
+    stop_loss_pct = st.sidebar.slider("Stop Loss (%)", 0.5, 10.0, 1.5, 0.5)
+    take_profit_pct = st.sidebar.slider("Take Profit (%)", 1.0, 20.0, 3.0, 0.5)
     rr_ratio = take_profit_pct / stop_loss_pct
     st.sidebar.caption(f"📈 Ratio R:R : **1:{rr_ratio:.2f}**")
 else:
@@ -51,7 +50,12 @@ else:
     st.sidebar.caption(f"📈 Ratio R:R : **1:{rr_ratio:.2f}**")
 
 st.sidebar.markdown("---")
-timeframe = st.sidebar.selectbox("Unité de Temps Globale", ["15m", "1h", "4h", "1d"], index=1)
+st.sidebar.header("📊 Seuils RSI")
+rsi_oversold = st.sidebar.slider("Seuil Achat (Survendu)", 20, 50, 40)
+rsi_overbought = st.sidebar.slider("Seuil Vente (Suracheté)", 50, 80, 60)
+
+st.sidebar.markdown("---")
+timeframe = st.sidebar.selectbox("Unité de Temps Globale", ["15m", "1h", "4h", "1d"], index=0)
 
 # Export Configuration JSON
 config_data = {
@@ -61,6 +65,9 @@ config_data = {
     "type_sl_tp": type_sl_tp,
     "stop_loss_pct": stop_loss_pct,
     "take_profit_pct": take_profit_pct,
+    "rsi_period": 14,
+    "rsi_oversold": rsi_oversold,
+    "rsi_overbought": rsi_overbought,
     "atr_period": atr_period,
     "atr_mult_sl": atr_mult_sl,
     "atr_mult_tp": atr_mult_tp
@@ -92,10 +99,7 @@ def fetch_data(symbol, interval, limit=100):
     except Exception:
         return pd.DataFrame()
 
-# --- OPTION DE VISUALISATION SUR L'INTERFACE ---
-st.subheader("🔎 Visualisation par Paire")
-selected_symbol = st.selectbox("Sélectionner une crypto à examiner en détail", YOUHOLDER_TOP_30, index=0)
-
+# --- 1. OPTION DE SCAN GLOBAL ---
 if st.button("▶️ Lancer le Scan Complet (30 Cryptos)", type="primary", use_container_width=True):
     results = []
     progress_bar = st.progress(0)
@@ -127,9 +131,9 @@ if st.button("▶️ Lancer le Scan Complet (30 Cryptos)", type="primary", use_c
                 tp_p = price + (atr * atr_mult_tp)
 
             sig = "NEUTRE"
-            if rsi < 30:
+            if rsi < rsi_oversold:
                 sig = "🟢 ACHAT"
-            elif rsi > 70:
+            elif rsi > rsi_overbought:
                 sig = "🔴 VENTE"
 
             results.append({
@@ -144,4 +148,64 @@ if st.button("▶️ Lancer le Scan Complet (30 Cryptos)", type="primary", use_c
     
     st.success("Scan complet terminé !")
     st.dataframe(pd.DataFrame(results), use_container_width=True)
+
+st.markdown("---")
+
+# --- 2. EXAMEN DÉTAILLÉ D'UNE CRYPTO SÉLECTIONNÉE ---
+st.subheader("🔎 Visualisation détaillée par Crypto")
+selected_symbol = st.selectbox("Sélectionner une crypto à examiner", YOUHOLDER_TOP_30, index=0)
+
+df_single = fetch_data(selected_symbol, timeframe)
+
+if not df_single.empty:
+    # Calcul RSI
+    delta = df_single['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df_single['RSI'] = 100 - (100 / (1 + rs))
+
+    # Calcul ATR
+    high_low = df_single['high'] - df_single['low']
+    high_close = np.abs(df_single['high'] - df_single['close'].shift())
+    low_close = np.abs(df_single['low'] - df_single['close'].shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = np.max(ranges, axis=1)
+    df_single['ATR'] = true_range.rolling(atr_period).mean()
+
+    curr_price = df_single['close'].iloc[-1]
+    curr_rsi = df_single['RSI'].iloc[-1]
+    curr_atr = df_single['ATR'].iloc[-1]
+
+    if type_sl_tp == "Pourcentage Fixe":
+        sl_val = curr_price * (1 - stop_loss_pct / 100)
+        tp_val = curr_price * (1 + take_profit_pct / 100)
+    else:
+        sl_val = curr_price - (curr_atr * atr_mult_sl)
+        tp_val = curr_price + (curr_atr * atr_mult_tp)
+
+    # Indicateurs Métriques
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Prix Actuel", f"${curr_price:,.4f}")
+    col2.metric("RSI (14)", f"{curr_rsi:.1f}")
+    col3.metric("Take Profit Cible", f"${tp_val:,.4f}")
+    col4.metric("Stop Loss Cible", f"${sl_val:,.4f}")
+
+    # Graphique Plotly
+    fig = go.Figure()
+    fig.add_trace(go.Candlestick(
+        x=df_single['timestamp'],
+        open=df_single['open'],
+        high=df_single['high'],
+        low=df_single['low'],
+        close=df_single['close'],
+        name="Prix"
+    ))
+    fig.add_hline(y=tp_val, line_dash="dash", line_color="green", annotation_text="Take Profit")
+    fig.add_hline(y=sl_val, line_dash="dash", line_color="red", annotation_text="Stop Loss")
+    fig.update_layout(title=f"Graphique {selected_symbol} ({timeframe})", xaxis_rangeslider_visible=False, height=500)
+
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.error("Impossible de récupérer les données pour cette crypto.")
 
