@@ -16,8 +16,8 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("📈 Crypto Market Scanner & Charts")
-st.caption("Analyse en temps réel via l'API Coinbase — Graphiques interactifs Plotly")
+st.title("📈 Crypto Market Scanner & Candlestick Charts")
+st.caption("Analyse en temps réel via l'API Coinbase — Graphiques interactifs Candlesticks & RSI")
 
 # ==========================================
 # 2. BARRE LATÉRALE DE CONFIGURATION
@@ -152,6 +152,9 @@ def fetch_symbol_data(symbol, gran):
             
         candles.reverse()
         timestamps = [pd.to_datetime(c[0], unit='s') for c in candles]
+        opens = [c[3] for c in candles]
+        highs = [c[2] for c in candles]
+        lows = [c[1] for c in candles]
         closes = [c[4] for c in candles]
         volumes = [c[5] for c in candles]
         
@@ -206,6 +209,9 @@ def fetch_symbol_data(symbol, gran):
             },
             "history": {
                 "timestamps": timestamps,
+                "opens": opens,
+                "highs": highs,
+                "lows": lows,
                 "closes": closes,
                 "upper_bb": upper_bb,
                 "lower_bb": lower_bb,
@@ -266,11 +272,12 @@ if results:
             return 'background-color: rgba(255, 0, 0, 0.2); font-weight: bold;'
         return ''
 
+    # Utilisation de .map() au lieu de .applymap() pour compatibilité Pandas
     styled_df = df.style.map(highlight_signal, subset=['Signal'])
     st.dataframe(styled_df, use_container_width=True, height=250)
 
-# Section 3 : Graphiques interactifs Plotly
-st.subheader("📈 Graphiques détaillés (Prix, Bollinger & RSI)")
+# Section 3 : Graphiques interactifs Plotly avec Chandeliers Japonais
+st.subheader("📈 Graphiques détaillés (Chandeliers Japonais, Bollinger & RSI)")
 
 if charts_data:
     target_symbol = st.selectbox("Choisir la crypto à afficher :", options=list(charts_data.keys()))
@@ -280,54 +287,59 @@ if charts_data:
         rows=2, cols=1,
         shared_xaxes=True,
         vertical_spacing=0.08,
-        subplot_titles=(f"Cours {target_symbol} & Bandes de Bollinger", "RSI (Relative Strength Index)"),
+        subplot_titles=(f"Cours {target_symbol} (Chandeliers) & Bandes de Bollinger", "RSI (Relative Strength Index)"),
         row_width=[0.3, 0.7]
     )
 
-    # Courbe du Prix
-    fig.add_trace(go.Scatter(
-        x=hist["timestamps"], y=hist["closes"],
-        mode='lines', name='Prix', line=dict(color='#00F2FE', width=2)
+    # 1. Candlesticks (Bougies japonaises)
+    fig.add_trace(go.Candlestick(
+        x=hist["timestamps"],
+        open=hist["opens"],
+        high=hist["highs"],
+        low=hist["lows"],
+        close=hist["closes"],
+        name='Prix (OHLC)',
+        increasing_line_color='#00E676',
+        decreasing_line_color='#FF5252'
     ), row=1, col=1)
 
-    # Bandes de Bollinger
+    # 2. Bandes de Bollinger
     fig.add_trace(go.Scatter(
         x=hist["timestamps"], y=hist["upper_bb"],
         mode='lines', name='Bollinger Supérieure',
-        line=dict(color='rgba(255, 255, 255, 0.3)', dash='dash')
+        line=dict(color='rgba(255, 255, 255, 0.4)', dash='dash')
     ), row=1, col=1)
 
     fig.add_trace(go.Scatter(
         x=hist["timestamps"], y=hist["lower_bb"],
         mode='lines', name='Bollinger Inférieure',
-        line=dict(color='rgba(255, 255, 255, 0.3)', dash='dash'),
-        fill='tonexty', fillcolor='rgba(255, 255, 255, 0.05)'
+        line=dict(color='rgba(255, 255, 255, 0.4)', dash='dash'),
+        fill='tonexty', fillcolor='rgba(255, 255, 255, 0.03)'
     ), row=1, col=1)
 
     fig.add_trace(go.Scatter(
         x=hist["timestamps"], y=hist["sma20"],
-        mode='lines', name='SMA 20 (Moyenne Bollinger)',
+        mode='lines', name='SMA 20',
         line=dict(color='#FFD700', width=1)
     ), row=1, col=1)
 
-    # Graphique RSI
+    # 3. RSI
     fig.add_trace(go.Scatter(
         x=hist["timestamps"], y=hist["rsi"],
         mode='lines', name='RSI (14)',
         line=dict(color='#E040FB', width=2)
     ), row=2, col=1)
 
-    # Lignes de survente / surachat RSI
     fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1, annotation_text="Surachat (70)")
     fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1, annotation_text="Survente (30)")
 
-    # Mise en page du graphique
     fig.update_layout(
-        height=600,
+        height=650,
         template="plotly_dark",
         margin=dict(l=20, r=20, t=40, b=20),
         hovermode="x unified",
-        showlegend=False
+        showlegend=False,
+        xaxis_rangeslider_visible=False
     )
     
     fig.update_yaxes(title_text="Prix ($)", row=1, col=1)
