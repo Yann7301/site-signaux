@@ -4,18 +4,20 @@ import numpy as np
 import plotly.graph_objects as go
 import requests
 import json
+import time
 
 st.set_page_config(page_title="Scanner YouHolder Multi-Paires", page_icon="📊", layout="wide")
 
 st.title("📊 Scanner & Analyse Trading - 30 Cryptos YouHolder")
 
+# Liste des 30 cryptos avec symboles Binance valides (POL & RENDER à la place de MATIC & RNDR)
 YOUHOLDER_TOP_30 = [
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
-    "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT", "POLUSDT",     # MATIC remplacé par POL
+    "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT", "POLUSDT",
     "LTCUSDT", "BCHUSDT", "UNIUSDT", "ATOMUSDT", "XLMUSDT",
     "ETCUSDT", "NEARUSDT", "ALGOUSDT", "ICPUSDT", "FILUSDT",
     "APTUSDT", "OPUSDT", "ARBUSDT", "LDOUSDT", "INJUSDT",
-    "TIAUSDT", "SUIUSDT", "RENDERUSDT", "PEPEUSDT", "DOGEUSDT"  # RNDR remplacé par RENDER
+    "TIAUSDT", "SUIUSDT", "RENDERUSDT", "PEPEUSDT", "DOGEUSDT"
 ]
 
 # --- PARAMÈTRES GLOBAUX ---
@@ -57,7 +59,7 @@ rsi_overbought = st.sidebar.slider("Seuil Vente (Suracheté)", 50, 80, 60)
 st.sidebar.markdown("---")
 timeframe = st.sidebar.selectbox("Unité de Temps Globale", ["15m", "1h", "4h", "1d"], index=0)
 
-# Export Configuration JSON
+# Export Configuration JSON pour bot.py
 config_data = {
     "timeframe": timeframe,
     "capital_initial": capital_initial,
@@ -85,9 +87,18 @@ st.sidebar.download_button(
 
 def fetch_data(symbol, interval, limit=100):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    }
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code != 200:
+            return pd.DataFrame()
+
         data = response.json()
+        if not isinstance(data, list) or len(data) == 0:
+            return pd.DataFrame()
+
         df = pd.DataFrame(data, columns=[
             'timestamp', 'open', 'high', 'low', 'close', 'volume',
             'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'
@@ -105,6 +116,8 @@ if st.button("▶️ Lancer le Scan Complet (30 Cryptos)", type="primary", use_c
     progress_bar = st.progress(0)
     for idx, sym in enumerate(YOUHOLDER_TOP_30):
         df = fetch_data(sym, timeframe)
+        time.sleep(0.1)  # Délai anti rate-limit
+
         if not df.empty and len(df) >= 30:
             delta = df['close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
@@ -132,9 +145,9 @@ if st.button("▶️ Lancer le Scan Complet (30 Cryptos)", type="primary", use_c
 
             sig = "NEUTRE"
             if rsi < rsi_oversold:
-                sig = "🟢 ACHAT"
+                sig = f"🟢 ACHAT (RSI < {rsi_oversold})"
             elif rsi > rsi_overbought:
-                sig = "🔴 VENTE"
+                sig = f"🔴 VENTE (RSI > {rsi_overbought})"
 
             results.append({
                 "Crypto": sym,
@@ -145,7 +158,7 @@ if st.button("▶️ Lancer le Scan Complet (30 Cryptos)", type="primary", use_c
                 "Stop Loss": f"${sl_p:,.4f}"
             })
         progress_bar.progress((idx + 1) / len(YOUHOLDER_TOP_30))
-    
+
     st.success("Scan complet terminé !")
     st.dataframe(pd.DataFrame(results), use_container_width=True)
 
@@ -157,7 +170,7 @@ selected_symbol = st.selectbox("Sélectionner une crypto à examiner", YOUHOLDER
 
 df_single = fetch_data(selected_symbol, timeframe)
 
-if not df_single.empty:
+if not df_single.empty and len(df_single) >= 30:
     # Calcul RSI
     delta = df_single['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
@@ -207,5 +220,5 @@ if not df_single.empty:
 
     st.plotly_chart(fig, use_container_width=True)
 else:
-    st.error("Impossible de récupérer les données pour cette crypto.")
+    st.error("Impossible de récupérer les données pour cette crypto. Réessayez dans quelques secondes.")
 

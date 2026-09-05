@@ -4,15 +4,16 @@ import requests
 import pandas as pd
 import numpy as np
 import resend
+import time
 
-# Liste des 30 cryptos YouHolder
+# Liste des 30 cryptos avec symboles Binance valides (POL & RENDER)
 YOUHOLDER_TOP_30 = [
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
-    "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT", "POLUSDT",     # MATIC remplacé par POL
+    "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT", "POLUSDT",
     "LTCUSDT", "BCHUSDT", "UNIUSDT", "ATOMUSDT", "XLMUSDT",
     "ETCUSDT", "NEARUSDT", "ALGOUSDT", "ICPUSDT", "FILUSDT",
     "APTUSDT", "OPUSDT", "ARBUSDT", "LDOUSDT", "INJUSDT",
-    "TIAUSDT", "SUIUSDT", "RENDERUSDT", "PEPEUSDT", "DOGEUSDT"  # RNDR remplacé par RENDER
+    "TIAUSDT", "SUIUSDT", "RENDERUSDT", "PEPEUSDT", "DOGEUSDT"
 ]
 
 CONFIG_FILE = "config.json"
@@ -50,9 +51,18 @@ TYPE_SL_TP = config.get("type_sl_tp", "Pourcentage Fixe")
 
 def get_klines(symbol, interval, limit=100):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    }
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code != 200:
+            return pd.DataFrame()
+
         data = response.json()
+        if not isinstance(data, list) or len(data) == 0:
+            return pd.DataFrame()
+
         df = pd.DataFrame(data, columns=[
             'timestamp', 'open', 'high', 'low', 'close', 'volume',
             'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'
@@ -72,6 +82,8 @@ def analyze_all_market():
 
     for symbol in YOUHOLDER_TOP_30:
         df = get_klines(symbol, TIMEFRAME)
+        time.sleep(0.1)  # Pause anti-rate-limit
+
         if df.empty or len(df) < 30:
             continue
 
@@ -112,7 +124,7 @@ def analyze_all_market():
         position_size_crypto = montant_risque / sl_dist if sl_dist > 0 else 0
         position_size_usd = position_size_crypto * current_price
 
-        # --- C'EST ICI QUE SE TROUVENT TES NOUVELLES LIGNES ---
+        # Chargement des seuils RSI personnalisés
         rsi_oversold = config.get("rsi_oversold", 40)
         rsi_overbought = config.get("rsi_overbought", 60)
 
@@ -121,7 +133,6 @@ def analyze_all_market():
             signal = f"ACHAT (RSI < {rsi_oversold})"
         elif current_rsi > rsi_overbought:
             signal = f"VENTE (RSI > {rsi_overbought})"
-        # ──────────────────────────────────────────────────────
 
         if signal:
             signals_detected.append({
