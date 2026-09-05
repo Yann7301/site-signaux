@@ -1,420 +1,204 @@
-import time
-import json
-import math
-import urllib.request
+import os
 import pandas as pd
-import streamlit as st
+import numpy as np
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import streamlit as st
+import ccxt
 import resend
 
-# ==========================================
-# 1. CONFIGURATION DE LA PAGE
-# ==========================================
+# --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(
-    page_title="Crypto Scanner Pro",
+    page_title="Scanner Crypto & Position Sizing",
     page_icon="📈",
     layout="wide"
 )
 
-st.title("📈 Crypto Market Scanner & Candlestick Charts")
-st.caption("Analyse en temps réel via l'API Coinbase — Graphiques interactifs Candlesticks & RSI")
+st.title("📈 Scanner Crypto Multi-Indicateurs & Risk Management")
 
-# ==========================================
-# 2. FONCTION D'ENVOI D'EMAIL
-# ==========================================
-def send_signal_email(symbol, signal_type, price, rsi, sl, tp):
-    if "RESEND_API_KEY" not in st.secrets or "TO_EMAIL" not in st.secrets:
-        st.warning("⚠️ Secrets RESEND_API_KEY ou TO_EMAIL manquants dans Streamlit Cloud.")
-        return False
+# --- BARRE LATÉRALE : PARAMÈTRES ET GESTION DU RISQUE ---
+st.sidebar.header("⚙️ Gestion du Risque")
+capital_total = st.sidebar.number_input("Capital Total ($)", min_value=50.0, value=1000.0, step=50.0)
+risque_pct = st.sidebar.slider("Risque par trade (%)", min_value=0.5, max_value=5.0, value=1.0, step=0.5)
+
+st.sidebar.header("🔍 Configuration du Scanner")
+symboles_defaut = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "AVAX/USDT", "BNB/USDT"]
+symboles_choisis = st.sidebar.multiselect("Paires à scanner", symboles_defaut, default=symboles_defaut)
+timeframe = st.sidebar.selectbox("Horizon de temps (Timeframe)", ["1h", "4h", "1d"], index=0)
+
+# --- FONCTIONS TECHNIQUES & CALCULS ---
+
+@st.cache_data(ttl=300)
+def charger_donnees(symbol, timeframe, limit=100):
+    """Récupère les données OHLCV depuis Binance via CCXT."""
+    exchange = ccxt.binance()
+    ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+    return df
+
+def calculer_indicateurs(df):
+    """Calcule le RSI, le MACD, les Bandes de Bollinger et l'ATR."""
+    # RSI (14)
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+
+    # MACD (12, 26, 9)
+    exp1 = df['close'].ewm(span=12, adjust=False).mean()
+    exp2 = df['close'].ewm(span=26, adjust=False).mean()
+    df['MACD'] = exp1 - exp2
+    df['Signal_MACD'] = df['MACD'].ewm(span=9, adjust=False).mean()
+
+    # Bandes de Bollinger (20, 2)
+    df['SMA20'] = df['close'].rolling(window=20).mean()
+    df['STD20'] = df['close'].rolling(window=20).std()
+    df['Bollinger_Upper'] = df['SMA20'] + (df['STD20'] * 2)
+    df['Bollinger_Lower'] = df['SMA20'] - (df['STD20'] * 2)
+
+    # ATR (14)
+    high_low = df['high'] - df['low']
+    high_close = np.abs(df['high'] - df['close'].shift())
+    low_close = np.abs(df['low'] - df['close'].shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = np.max(ranges, axis=1)
+    df['ATR'] = true_range.rolling(14).mean()
+
+    return df
+
+def analyser_signal(df):
+    """Détecte les signaux ACHAT ou VENTE selon les indicateurs."""
+    derniere_ligne = df.iloc[-1]
     
+    rsi = derniere_ligne['RSI']
+    macd = derniere_ligne['MACD']
+    signal_macd = derniere_ligne['Signal_MACD']
+    close = derniere_ligne['close']
+    bollinger_lower = derniere_ligne['Bollinger_Lower']
+    bollinger_upper = derniere_ligne['Bollinger_Upper']
+    atr = derniere_ligne['ATR']
+
+    signal = "NEUTRE"
+
+    # Condition d'ACHAT : RSI survendu (< 40), croisement MACD haussier, prix proche bas Bollinger
+    if rsi < 40 and macd > signal_macd and close <= bollinger_lower * 1.01:
+        signal = "ACHAT"
+        sl = close - (1.5 * atr)
+        tp = close + (3.0 * atr)
+    # Condition de VENTE : RSI suracheté (> 60), croisement MACD baissier, prix proche haut Bollinger
+    elif rsi > 60 and macd < signal_macd and close >= bollinger_upper * 0.99:
+        signal = "VENTE"
+        sl = close + (1.5 * atr)
+        tp = close - (3.0 * atr)
+    else:
+        sl = 0.0
+        tp = 0.0
+
+    return signal, close, sl, tp, atr
+
+def calculer_taille_position(capital, risque_pct, prix_entree, stop_loss):
+    """Calcule le montant en $ à investir pour respecter le risque choisi."""
+    distance_sl_pct = abs(prix_entree - stop_loss) / prix_entree
+    if distance_sl_pct == 0:
+        return 0.0, 0.0
+    
+    montant_risque_usd = capital * (risque_pct / 100.0)
+    position_usd = montant_risque_usd / distance_sl_pct
+    return round(position_usd, 2), round(montant_risque_usd, 2)
+
+def envoyer_email_alerte(symbol, signal_type, prix, sl, tp, pos_usd, risque_usd):
+    """Envoie un mail formaté via l'API Resend."""
+    api_key = st.secrets.get("RESEND_API_KEY")
+    to_email = st.secrets.get("TO_EMAIL")
+
+    if not api_key or not to_email:
+        st.error("⚠️ Secrets RESEND_API_KEY ou TO_EMAIL manquants dans Streamlit Cloud.")
+        return False
+
+    resend.api_key = api_key
+
+    contenu_html = f"""
+    <h2>🚨 Signal Crypto : {signal_type} sur {symbol}</h2>
+    <p>Un nouveau signal vient d'être identifié par le scanner.</p>
+    <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; font-family: Arial, sans-serif;">
+      <tr><td><b>Paire</b></td><td>{symbol}</td></tr>
+      <tr><td><b>Signal</b></td><td><b>{signal_type}</b></td></tr>
+      <tr><td><b>Prix d'entrée</b></td><td>${prix:,.2f}</td></tr>
+      <tr><td><b>Stop-Loss (SL)</b></td><td>${sl:,.2f}</td></tr>
+      <tr><td><b>Take-Profit (TP)</b></td><td>${tp:,.2f}</td></tr>
+      <tr style="background-color: #f2f2f2;">
+        <td><b>Taille de position suggérée</b></td>
+        <td><b>${pos_usd:,.2f}</b></td>
+      </tr>
+      <tr style="background-color: #ffe6e6;">
+        <td><b>Risque ($)</b></td>
+        <td><b>${risque_usd:,.2f}</b></td>
+      </tr>
+    </table>
+    <p><small>Message automatisé de ton scanner Streamlit Cloud.</small></p>
+    """
+
     try:
-        resend.api_key = st.secrets["RESEND_API_KEY"]
-        
-        subject = f"🚨 SIGNAL CRYPTO : {signal_type} sur {symbol} (${price:,})"
-        
-        body = f"""
-        <h3>Alerte Détectée sur {symbol}</h3>
-        <ul>
-            <li><b>Action :</b> {signal_type}</li>
-            <li><b>Prix actuel :</b> ${price:,}</li>
-            <li><b>RSI :</b> {rsi}</li>
-            <li><b>Stop-Loss (SL) :</b> ${sl}</li>
-            <li><b>Take-Profit (TP) :</b> ${tp}</li>
-        </ul>
-        <p><i>Message envoyé automatiquement par votre scanner Streamlit.</i></p>
-        """
-        
         resend.Emails.send({
-            "from": "CryptoAlerts <onboarding@resend.dev>",
-            "to": [st.secrets["TO_EMAIL"]],
-            "subject": subject,
-            "html": body
+            "from": "Scanner Crypto <onboarding@resend.dev>",
+            "to": [to_email],
+            "subject": f"[{signal_type}] {symbol} - Taille position : ${pos_usd:,.0f}",
+            "html": contenu_html
         })
         return True
     except Exception as e:
-        st.error(f"Erreur d'envoi de l'email : {e}")
+        st.error(f"Erreur d'envoi mail : {e}")
         return False
 
-# ==========================================
-# 3. BARRE LATÉRALE DE CONFIGURATION
-# ==========================================
-st.sidebar.header("⚙️ Paramètres")
+# --- EXÉCUTION DU SCANNER ---
 
-DEFAULT_SYMBOLS = ["BTC-USD", "ETH-USD", "SOL-USD", "XLM-USD", "DOGE-USD", "AVAX-USD", "LINK-USD"]
-selected_symbols = st.sidebar.multiselect(
-    "Cryptomonnaies à analyser :",
-    options=DEFAULT_SYMBOLS + ["ADA-USD", "DOT-USD", "MATIC-USD", "NEAR-USD"],
-    default=DEFAULT_SYMBOLS
-)
-
-granularity_options = {
-    "15 minutes": 900,
-    "1 heure": 3600,
-    "4 heures": 14400,
-    "1 jour": 86400
-}
-selected_timeframe = st.sidebar.selectbox("Unité de temps :", list(granularity_options.keys()), index=1)
-granularity = granularity_options[selected_timeframe]
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("🎯 Stratégie ATR")
-atr_sl_mult = st.sidebar.slider("Multiplicateur Stop-Loss (ATR)", 1.0, 3.0, 1.5, 0.1)
-atr_tp_mult = st.sidebar.slider("Multiplicateur Take-Profit (ATR)", 1.5, 5.0, 3.0, 0.1)
-
-# ==========================================
-# 4. CALCULS INDICATEURS (PURE PYTHON)
-# ==========================================
-def calculate_sma(data, period):
-    if len(data) < period:
-        return [0] * len(data)
-    sma = []
-    for i in range(len(data)):
-        if i < period - 1:
-            sma.append(0)
-        else:
-            sma.append(sum(data[i - period + 1 : i + 1]) / period)
-    return sma
-
-def calculate_ema(prices, period):
-    k = 2 / (period + 1)
-    ema = [prices[0]]
-    for price in prices[1:]:
-        ema.append(price * k + ema[-1] * (1 - k))
-    return ema
-
-def calculate_rsi(prices, period=14):
-    gains, losses = [], []
-    for i in range(1, len(prices)):
-        change = prices[i] - prices[i - 1]
-        gains.append(max(change, 0))
-        losses.append(max(-change, 0))
+if st.button("🚀 Lancer le balayage du marché"):
+    resultats = []
     
-    avg_gain = sum(gains[:period]) / period
-    avg_loss = sum(losses[:period]) / period
-    rsi = []
-    
-    for i in range(period, len(prices)):
-        change = prices[i] - prices[i - 1]
-        gain = max(change, 0)
-        loss = max(-change, 0)
-        avg_gain = (avg_gain * (period - 1) + gain) / period
-        avg_loss = (avg_loss * (period - 1) + loss) / period
-        
-        if avg_loss == 0:
-            rsi.append(100)
-        else:
-            rs = avg_gain / avg_loss
-            rsi.append(100 - (100 / (1 + rs)))
-    return rsi
-
-def calculate_macd(prices, fast=12, slow=26, signal_period=9):
-    ema_fast = calculate_ema(prices, fast)
-    ema_slow = calculate_ema(prices, slow)
-    macd_line = [f - s for f, s in zip(ema_fast[slow - 1:], ema_slow[slow - 1:])]
-    signal_line = calculate_ema(macd_line, signal_period)
-    return macd_line[-len(signal_line):], signal_line
-
-def calculate_bollinger(prices, period=20, std_dev=2):
-    sma = calculate_sma(prices, period)
-    upper_band, lower_band = [], []
-    
-    for i in range(len(prices)):
-        if i < period - 1:
-            upper_band.append(0)
-            lower_band.append(0)
-        else:
-            slice_p = prices[i - period + 1 : i + 1]
-            mean = sma[i]
-            variance = sum((x - mean) ** 2 for x in slice_p) / period
-            stdev = math.sqrt(variance)
-            upper_band.append(mean + (std_dev * stdev))
-            lower_band.append(mean - (std_dev * stdev))
+    for symbol in symboles_choisis:
+        try:
+            df = charger_donnees(symbol, timeframe)
+            df = calculer_indicateurs(df)
+            signal, prix, sl, tp, atr = analyser_signal(df)
             
-    return upper_band, lower_band, sma
-
-def calculate_atr(candles, period=14):
-    tr_list = []
-    for i in range(1, len(candles)):
-        high = candles[i][2]
-        low = candles[i][1]
-        prev_close = candles[i - 1][4]
-        
-        tr1 = high - low
-        tr2 = abs(high - prev_close)
-        tr3 = abs(low - prev_close)
-        
-        tr_list.append(max(tr1, tr2, tr3))
-        
-    if len(tr_list) < period:
-        return 0
-    
-    atr = sum(tr_list[:period]) / period
-    for tr in tr_list[period:]:
-        atr = (atr * (period - 1) + tr) / period
-        
-    return atr
-
-# ==========================================
-# 5. MOTEUR D'ANALYSE ET RÉCUPÉRATION
-# ==========================================
-@st.cache_data(ttl=60)
-def fetch_symbol_data(symbol, gran):
-    try:
-        url = f"https://api.exchange.coinbase.com/products/{symbol}/candles?granularity={gran}"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        
-        with urllib.request.urlopen(req) as response:
-            candles = json.loads(response.read().decode())
-            
-        candles.reverse()
-        timestamps = [pd.to_datetime(c[0], unit='s') for c in candles]
-        opens = [c[3] for c in candles]
-        highs = [c[2] for c in candles]
-        lows = [c[1] for c in candles]
-        closes = [c[4] for c in candles]
-        volumes = [c[5] for c in candles]
-        
-        if len(closes) < 200:
-            return None
-
-        rsi_vals = calculate_rsi(closes, 14)
-        macd_line, macd_signal = calculate_macd(closes)
-        upper_bb, lower_bb, sma20 = calculate_bollinger(closes, 20, 2)
-        sma200 = calculate_sma(closes, 200)
-        vol_sma20 = calculate_sma(volumes, 20)
-        current_atr = calculate_atr(candles, 14)
-
-        price = closes[-1]
-        rsi = rsi_vals[-1]
-        vol = volumes[-1]
-        vol_avg = vol_sma20[-1]
-        
-        last_macd, prev_macd = macd_line[-1], macd_line[-2]
-        last_sig, prev_sig = macd_signal[-1], macd_signal[-2]
-        
-        is_uptrend = price > sma200[-1]
-        is_downtrend = price < sma200[-1]
-        volume_spike = vol > (vol_avg * 1.1)
-
-        signal_type = "NEUTRE"
-        if rsi < 38 and (prev_macd < prev_sig and last_macd > last_sig) and is_uptrend and (price <= lower_bb[-1] * 1.01) and volume_spike:
-            signal_type = "ACHAT"
-        elif rsi > 62 and (prev_macd > prev_sig and last_macd < last_sig) and is_downtrend and (price >= upper_bb[-1] * 0.99) and volume_spike:
-            signal_type = "VENTE"
-
-        if signal_type == "ACHAT":
-            sl = price - (atr_sl_mult * current_atr)
-            tp = price + (atr_tp_mult * current_atr)
-        elif signal_type == "VENTE":
-            sl = price + (atr_sl_mult * current_atr)
-            tp = price - (atr_tp_mult * current_atr)
-        else:
-            sl, tp = None, None
-
-        return {
-            "summary": {
-                "Paire": symbol,
-                "Prix ($)": price,
-                "RSI": round(rsi, 1),
-                "Tendance": "🟢 Haussière" if is_uptrend else "🔴 Baissière",
-                "Volume Spike": "✅ Oui" if volume_spike else "❌ Non",
-                "ATR ($)": round(current_atr, 4),
-                "Signal": signal_type,
-                "Stop-Loss ($)": round(sl, 4) if sl else "-",
-                "Take-Profit ($)": round(tp, 4) if tp else "-"
-            },
-            "history": {
-                "timestamps": timestamps,
-                "opens": opens,
-                "highs": highs,
-                "lows": lows,
-                "closes": closes,
-                "upper_bb": upper_bb,
-                "lower_bb": lower_bb,
-                "sma20": sma20,
-                "rsi": [None] * (len(closes) - len(rsi_vals)) + rsi_vals,
-                "sl": sl,
-                "tp": tp,
-                "signal": signal_type
-            }
-        }
-    except Exception as e:
-        st.error(f"Erreur lors du traitement de {symbol} : {e}")
-        return None
-
-# ==========================================
-# 6. EXECUTION ET GESTION DES EMAILS
-# ==========================================
-if "sent_alerts" not in st.session_state:
-    st.session_state["sent_alerts"] = set()
-
-if st.button("🔄 Rafraîchir les données"):
-    st.cache_data.clear()
-
-results = []
-signals = []
-charts_data = {}
-
-with st.spinner("Analyse du marché et génération des graphiques..."):
-    for sym in selected_symbols:
-        res = fetch_symbol_data(sym, granularity)
-        if res:
-            summary = res["summary"]
-            results.append(summary)
-            charts_data[sym] = res["history"]
-            
-            sig = summary["Signal"]
-            if sig in ["ACHAT", "VENTE"]:
-                signals.append(summary)
+            if signal in ["ACHAT", "VENTE"]:
+                pos_usd, risque_usd = calculer_taille_position(capital_total, risque_pct, prix, sl)
                 
-                alert_key = f"{sym}_{sig}_{summary['Prix ($)']}"
-                if alert_key not in st.session_state["sent_alerts"]:
-                    sent = send_signal_email(
-                        symbol=sym,
-                        signal_type=sig,
-                        price=summary["Prix ($)"],
-                        rsi=summary["RSI"],
-                        sl=summary["Stop-Loss ($)"],
-                        tp=summary["Take-Profit ($)"]
-                    )
-                    if sent:
-                        st.session_state["sent_alerts"].add(alert_key)
+                # Envoi de l'alerte mail
+                mail_envoye = envoyer_email_alerte(symbol, signal, prix, sl, tp, pos_usd, risque_usd)
+                
+                resultats.append({
+                    "Paire": symbol,
+                    "Signal": signal,
+                    "Prix ($)": f"${prix:,.2f}",
+                    "Stop-Loss ($)": f"${sl:,.2f}",
+                    "Take-Profit ($)": f"${tp:,.2f}",
+                    "Position ($)": f"${pos_usd:,.2f}",
+                    "Risque ($)": f"${risque_usd:,.2f}",
+                    "Email": "Envoyé 📧" if mail_envoye else "Échec ❌"
+                })
 
-# ==========================================
-# 7. AFFICHAGE DE L'INTERFACE
-# ==========================================
+                # Affichage graphique pour les paires avec signal
+                st.subheader(f"📊 Graphique : {symbol} ({signal})")
+                fig = go.Figure(data=[go.Candlestick(
+                    x=df['timestamp'],
+                    open=df['open'], high=df['high'],
+                    low=df['low'], close=df['close'],
+                    name="Prix"
+                )])
+                fig.add_hline(y=sl, line_dash="dash", line_color="red", annotation_text="Stop-Loss")
+                fig.add_hline(y=tp, line_dash="dash", line_color="green", annotation_text="Take-Profit")
+                fig.update_layout(xaxis_rangeslider_visible=False, template="plotly_dark", height=400)
+                st.plotly_chart(fig, use_container_width=True)
 
-# Section 1 : Alerte Signaux
-if signals:
-    st.subheader("🚀 Signaux Détectés")
-    for sig in signals:
-        st.success(f"**{sig['Paire']}** — Signal **{sig['Signal']}** détecté au prix de **${sig['Prix ($)']:,}** (Alerte email envoyée 📧)")
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Prix d'entrée", f"${sig['Prix ($)']:,}")
-        col2.metric("RSI", sig["RSI"])
-        col3.metric("Stop-Loss (SL)", f"${sig['Stop-Loss ($)']:,}")
-        col4.metric("Take-Profit (TP)", f"${sig['Take-Profit ($)']:,}")
-        st.markdown("---")
-else:
-    st.info("Aucun signal d'achat ou de vente strict détecté actuellement.")
+        except Exception as e:
+            st.error(f"Erreur lors de l'analyse de {symbol} : {e}")
 
-# Section 2 : Tableau global
-st.subheader("📊 Vue d'ensemble du marché")
-if results:
-    df = pd.DataFrame(results)
-    
-    def highlight_signal(val):
-        if val == "ACHAT":
-            return 'background-color: rgba(0, 255, 0, 0.2); font-weight: bold;'
-        elif val == "VENTE":
-            return 'background-color: rgba(255, 0, 0, 0.2); font-weight: bold;'
-        return ''
-
-    styled_df = df.style.map(highlight_signal, subset=['Signal'])
-    st.dataframe(styled_df, use_container_width=True, height=250)
-
-# Section 3 : Graphiques interactifs Plotly
-st.subheader("📈 Graphiques détaillés (Chandeliers Japonais, Bollinger & RSI)")
-
-if charts_data:
-    target_symbol = st.selectbox("Choisir la crypto à afficher :", options=list(charts_data.keys()))
-    hist = charts_data[target_symbol]
-
-    fig = make_subplots(
-        rows=2, cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.08,
-        subplot_titles=(f"Cours {target_symbol} (Chandeliers) & Bandes de Bollinger", "RSI (Relative Strength Index)"),
-        row_width=[0.3, 0.7]
-    )
-
-    # 1. Candlesticks (Bougies japonaises)
-    fig.add_trace(go.Candlestick(
-        x=hist["timestamps"],
-        open=hist["opens"],
-        high=hist["highs"],
-        low=hist["lows"],
-        close=hist["closes"],
-        name='Prix (OHLC)',
-        increasing_line_color='#00E676',
-        decreasing_line_color='#FF5252'
-    ), row=1, col=1)
-
-    # 2. Bandes de Bollinger
-    fig.add_trace(go.Scatter(
-        x=hist["timestamps"], y=hist["upper_bb"],
-        mode='lines', name='Bollinger Supérieure',
-        line=dict(color='rgba(255, 255, 255, 0.4)', dash='dash')
-    ), row=1, col=1)
-
-    fig.add_trace(go.Scatter(
-        x=hist["timestamps"], y=hist["lower_bb"],
-        mode='lines', name='Bollinger Inférieure',
-        line=dict(color='rgba(255, 255, 255, 0.4)', dash='dash'),
-        fill='tonexty', fillcolor='rgba(255, 255, 255, 0.03)'
-    ), row=1, col=1)
-
-    fig.add_trace(go.Scatter(
-        x=hist["timestamps"], y=hist["sma20"],
-        mode='lines', name='SMA 20',
-        line=dict(color='#FFD700', width=1)
-    ), row=1, col=1)
-
-    # 3. Lignes Stop-Loss et Take-Profit si signal actif
-    if hist["sl"] and hist["tp"]:
-        fig.add_hline(
-            y=hist["sl"], line_dash="dash", line_color="#FF3333", line_width=2,
-            row=1, col=1, annotation_text=f"Stop-Loss (${hist['sl']:.4f})", annotation_position="top left"
-        )
-        fig.add_hline(
-            y=hist["tp"], line_dash="dash", line_color="#00FF66", line_width=2,
-            row=1, col=1, annotation_text=f"Take-Profit (${hist['tp']:.4f})", annotation_position="bottom left"
-        )
-
-    # 4. RSI
-    fig.add_trace(go.Scatter(
-        x=hist["timestamps"], y=hist["rsi"],
-        mode='lines', name='RSI (14)',
-        line=dict(color='#E040FB', width=2)
-    ), row=2, col=1)
-
-    fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1, annotation_text="Surachat (70)")
-    fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1, annotation_text="Survente (30)")
-
-    fig.update_layout(
-        height=650,
-        template="plotly_dark",
-        margin=dict(l=20, r=20, t=40, b=20),
-        hovermode="x unified",
-        showlegend=False,
-        xaxis_rangeslider_visible=False
-    )
-    
-    fig.update_yaxes(title_text="Prix ($)", row=1, col=1)
-    fig.update_yaxes(title_text="RSI", range=[0, 100], row=2, col=1)
-
-    st.plotly_chart(fig, use_container_width=True)
-
-st.caption(f"Dernière mise à jour : {time.strftime('%H:%M:%S')}")
+    # Résumé des signaux
+    if resultats:
+        st.success(f"Détéction terminée : {len(resultats)} signal(s) trouvé(s) !")
+        st.table(pd.DataFrame(resultats))
+    else:
+        st.info("Aucun signal fort détecté sur le marché actuellement.")
 
