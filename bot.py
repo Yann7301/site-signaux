@@ -6,7 +6,6 @@ import numpy as np
 import resend
 import time
 
-# Liste des 30 cryptos avec symboles Binance valides (POL & RENDER)
 YOUHOLDER_TOP_30 = [
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
     "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT", "POLUSDT",
@@ -50,29 +49,53 @@ RISQUE_PCT = config.get("risque_pct", 1.0)
 TYPE_SL_TP = config.get("type_sl_tp", "Pourcentage Fixe")
 
 def get_klines(symbol, interval, limit=100):
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    # 1. Binance Direct & Binance US
+    endpoints = [
+        f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}",
+        f"https://api.binance.us/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    ]
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0",
+        "Accept": "application/json"
     }
+    
+    for url in endpoints:
+        try:
+            response = requests.get(url, headers=headers, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                if isinstance(data, list) and len(data) > 0:
+                    df = pd.DataFrame(data, columns=[
+                        'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                        'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'
+                    ])
+                    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                    for col in ['open', 'high', 'low', 'close', 'volume']:
+                        df[col] = df[col].astype(float)
+                    return df
+        except Exception:
+            continue
+
+    # 2. Secours CryptoCompare (si Binance bloque l'IP)
     try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code != 200:
-            return pd.DataFrame()
-
-        data = response.json()
-        if not isinstance(data, list) or len(data) == 0:
-            return pd.DataFrame()
-
-        df = pd.DataFrame(data, columns=[
-            'timestamp', 'open', 'high', 'low', 'close', 'volume',
-            'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'
-        ])
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        for col in ['open', 'high', 'low', 'close', 'volume']:
-            df[col] = df[col].astype(float)
-        return df
+        coin = symbol.replace("USDT", "")
+        hist_type = "histominute" if interval in ["15m"] else "histohour" if interval in ["1h", "4h"] else "histoday"
+        agg = 15 if interval == "15m" else 4 if interval == "4h" else 1
+        
+        cc_url = f"https://min-api.cryptocompare.com/data/v2/{hist_type}?fsym={coin}&tsym=USDT&limit={limit}&aggregate={agg}"
+        res = requests.get(cc_url, timeout=5)
+        if res.status_code == 200:
+            json_res = res.json()
+            if json_res.get("Response") == "Success":
+                raw_data = json_res["Data"]["Data"]
+                df = pd.DataFrame(raw_data)
+                df.rename(columns={'time': 'timestamp', 'volumeto': 'volume'}, inplace=True)
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+                return df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
     except Exception:
-        return pd.DataFrame()
+        pass
+
+    return pd.DataFrame()
 
 def analyze_all_market():
     signals_detected = []
@@ -82,12 +105,11 @@ def analyze_all_market():
 
     for symbol in YOUHOLDER_TOP_30:
         df = get_klines(symbol, TIMEFRAME)
-        time.sleep(0.1)  # Pause anti-rate-limit
+        time.sleep(0.05)
 
         if df.empty or len(df) < 30:
             continue
 
-        # RSI
         rsi_period = config.get("rsi_period", 14)
         delta = df['close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=rsi_period).mean()
@@ -95,7 +117,6 @@ def analyze_all_market():
         rs = gain / loss
         df['RSI'] = 100 - (100 / (1 + rs))
 
-        # ATR
         atr_period = config.get("atr_period", 14)
         high_low = df['high'] - df['low']
         high_close = np.abs(df['high'] - df['close'].shift())
@@ -108,7 +129,6 @@ def analyze_all_market():
         current_rsi = df['RSI'].iloc[-1]
         current_atr = df['ATR'].iloc[-1]
 
-        # Calcul TP/SL
         if TYPE_SL_TP == "Pourcentage Fixe":
             sl_pct = config.get("stop_loss_pct", 1.5)
             tp_pct = config.get("take_profit_pct", 3.0)
@@ -124,7 +144,6 @@ def analyze_all_market():
         position_size_crypto = montant_risque / sl_dist if sl_dist > 0 else 0
         position_size_usd = position_size_crypto * current_price
 
-        # Chargement des seuils RSI personnalisés
         rsi_oversold = config.get("rsi_oversold", 40)
         rsi_overbought = config.get("rsi_overbought", 60)
 
