@@ -18,12 +18,15 @@ YOUHOLDER_TOP_30 = [
 CONFIG_FILE = "config.json"
 
 default_config = {
-    "timeframe": "1h",
+    "timeframe": "15m",
     "capital_initial": 1000.0,
     "risque_pct": 1.0,
     "type_sl_tp": "Pourcentage Fixe",
-    "stop_loss_pct": 2.0,
-    "take_profit_pct": 4.0,
+    "stop_loss_pct": 1.5,
+    "take_profit_pct": 3.0,
+    "rsi_period": 14,
+    "rsi_oversold": 40,
+    "rsi_overbought": 60,
     "atr_period": 14,
     "atr_mult_sl": 1.5,
     "atr_mult_tp": 3.0
@@ -40,7 +43,7 @@ if os.path.exists(CONFIG_FILE):
 else:
     config = default_config
 
-TIMEFRAME = config.get("timeframe", "1h")
+TIMEFRAME = config.get("timeframe", "15m")
 CAPITAL = config.get("capital_initial", 1000.0)
 RISQUE_PCT = config.get("risque_pct", 1.0)
 TYPE_SL_TP = config.get("type_sl_tp", "Pourcentage Fixe")
@@ -72,10 +75,11 @@ def analyze_all_market():
         if df.empty or len(df) < 30:
             continue
 
-        # RSI (14)
+        # RSI
+        rsi_period = config.get("rsi_period", 14)
         delta = df['close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        gain = (delta.where(delta > 0, 0)).rolling(window=rsi_period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period).mean()
         rs = gain / loss
         df['RSI'] = 100 - (100 / (1 + rs))
 
@@ -94,8 +98,8 @@ def analyze_all_market():
 
         # Calcul TP/SL
         if TYPE_SL_TP == "Pourcentage Fixe":
-            sl_pct = config.get("stop_loss_pct", 2.0)
-            tp_pct = config.get("take_profit_pct", 4.0)
+            sl_pct = config.get("stop_loss_pct", 1.5)
+            tp_pct = config.get("take_profit_pct", 3.0)
             sl_price = current_price * (1 - sl_pct / 100)
             tp_price = current_price * (1 + tp_pct / 100)
         else:
@@ -108,11 +112,16 @@ def analyze_all_market():
         position_size_crypto = montant_risque / sl_dist if sl_dist > 0 else 0
         position_size_usd = position_size_crypto * current_price
 
+        # --- C'EST ICI QUE SE TROUVENT TES NOUVELLES LIGNES ---
+        rsi_oversold = config.get("rsi_oversold", 40)
+        rsi_overbought = config.get("rsi_overbought", 60)
+
         signal = None
-        if current_rsi < 30:
-            signal = "ACHAT (Survendu)"
-        elif current_rsi > 70:
-            signal = "VENTE (Suracheté)"
+        if current_rsi < rsi_oversold:
+            signal = f"ACHAT (RSI < {rsi_oversold})"
+        elif current_rsi > rsi_overbought:
+            signal = f"VENTE (RSI > {rsi_overbought})"
+        # ──────────────────────────────────────────────────────
 
         if signal:
             signals_detected.append({
