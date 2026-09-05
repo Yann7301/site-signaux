@@ -2,19 +2,19 @@ name: Scanner Crypto 24h/24
 
 on:
   schedule:
-    # Exécution automatique au début de chaque heure (Ex: 10h00, 11h00, etc.)
+    # Exécution automatique au début de chaque heure
     - cron: '0 * * * *'
-  workflow_dispatch: # Permet de déclencher le scan manuellement depuis GitHub si besoin
+  workflow_dispatch: # Permet de déclencher le scan manuellement depuis GitHub
 
 jobs:
   run-scanner:
     runs-on: ubuntu-latest
     steps:
       - name: Récupérer le code du dépôt
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Configurer Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
