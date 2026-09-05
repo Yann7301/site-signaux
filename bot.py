@@ -1,140 +1,178 @@
+import json
 import os
-import pandas as pd
 import numpy as np
-import ccxt
+import pandas as pd
 import resend
+import requests
 
-# --- PARAMÈTRES DU BOT ---
-CAPITAL_TOTAL = 1000.0  # Ton capital par défaut ($)
-RISQUE_PCT = 1.0        # Pourcentage de risque par trade (1%)
-SYMBOLES = ["BTC/USD", "ETH/USD", "SOL/USD", "AVAX/USD", "ADA/USD"]
-TIMEFRAME = "1h"
+# --- 1. CHARGEMENT CONFIGURATION ---
+CONFIG_FILE = "config.json"
 
-# --- FONCTIONS TECHNIQUES ---
+default_config = {
+    "symbol": "BTCUSDT",
+    "timeframe": "1h",
+    "capital_initial": 1000.0,
+    "risque_pct": 1.0,
+    "type_sl_tp": "Pourcentage Fixe",
+    "stop_loss_pct": 2.0,
+    "take_profit_pct": 4.0,
+    "atr_period": 14,
+    "atr_mult_sl": 1.5,
+    "atr_mult_tp": 3.0,
+}
 
-def charger_donnees(symbol, timeframe, limit=100):
-    exchange = ccxt.coinbase()
-    ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
-    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+if os.path.exists(CONFIG_FILE):
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        print(f"⚙️ Configuration chargée depuis {CONFIG_FILE}")
+    except Exception as e:
+        print(
+            f"⚠️ Erreur de lecture de {CONFIG_FILE}, utilisation de la config par défaut: {e}"
+        )
+        config = default_config
+else:
+    print("ℹ️ Aucun config.json trouvé, utilisation des paramètres par défaut.")
+    config = default_config
+
+SYMBOL = config.get("symbol", "BTCUSDT")
+TIMEFRAME = config.get("timeframe", "1h")
+CAPITAL = config.get("capital_initial", 1000.0)
+RISQUE_PCT = config.get("risque_pct", 1.0)
+TYPE_SL_TP = config.get("type_sl_tp", "Pourcentage Fixe")
+
+
+# --- 2. RÉCUPÉRATION DONNÉES BINANCE ---
+def get_klines(symbol, interval, limit=100):
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    response = requests.get(url, timeout=10)
+    data = response.json()
+
+    df = pd.DataFrame(
+        data,
+        columns=[
+            "timestamp",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "close_time",
+            "qav",
+            "num_trades",
+            "taker_base_vol",
+            "taker_quote_vol",
+            "ignore",
+        ],
+    )
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+    for col in ["open", "high", "low", "close", "volume"]:
+        df[col] = df[col].astype(float)
     return df
 
-def calculer_indicateurs(df):
-    # RSI (14)
-    delta = df['close'].diff()
+
+# --- 3. ANALYSE ET ENVOI DE SIGNAL ---
+def analyze_market():
+    df = get_klines(SYMBOL, TIMEFRAME)
+    if df.empty:
+        print("❌ Aucune donnée récupérée.")
+        return
+
+    # RSI
+    delta = df["close"].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
-    df['RSI'] = 100 - (100 / (1 + rs))
+    df["RSI"] = 100 - (100 / (1 + rs))
 
-    # MACD (12, 26, 9)
-    exp1 = df['close'].ewm(span=12, adjust=False).mean()
-    exp2 = df['close'].ewm(span=26, adjust=False).mean()
-    df['MACD'] = exp1 - exp2
-    df['Signal_MACD'] = df['MACD'].ewm(span=9, adjust=False).mean()
-
-    # Bandes de Bollinger (20, 2)
-    df['SMA20'] = df['close'].rolling(window=20).mean()
-    df['STD20'] = df['close'].rolling(window=20).std()
-    df['Bollinger_Lower'] = df['SMA20'] - (df['STD20'] * 2)
-    df['Bollinger_Upper'] = df['SMA20'] + (df['STD20'] * 2)
-
-    # ATR (14)
-    high_low = df['high'] - df['low']
-    high_close = np.abs(df['high'] - df['close'].shift())
-    low_close = np.abs(df['low'] - df['close'].shift())
+    # ATR
+    high_low = df["high"] - df["low"]
+    high_close = np.abs(df["high"] - df["close"].shift())
+    low_close = np.abs(df["low"] - df["close"].shift())
     ranges = pd.concat([high_low, high_close, low_close], axis=1)
     true_range = np.max(ranges, axis=1)
-    df['ATR'] = true_range.rolling(14).mean()
+    atr_period = config.get("atr_period", 14)
+    df["ATR"] = true_range.rolling(atr_period).mean()
 
-    return df
+    current_price = df["close"].iloc[-1]
+    current_rsi = df["RSI"].iloc[-1]
+    current_atr = df["ATR"].iloc[-1]
 
-def analyser_signal(df):
-    derniere_ligne = df.iloc[-1]
-    rsi = derniere_ligne['RSI']
-    macd = derniere_ligne['MACD']
-    signal_macd = derniere_ligne['Signal_MACD']
-    close = derniere_ligne['close']
-    bollinger_lower = derniere_ligne['Bollinger_Lower']
-    bollinger_upper = derniere_ligne['Bollinger_Upper']
-    atr = derniere_ligne['ATR']
-
-    signal = "NEUTRE"
-
-    if rsi < 40 and macd > signal_macd and close <= bollinger_lower * 1.01:
-        signal = "ACHAT"
-        sl = close - (1.5 * atr)
-        tp = close + (3.0 * atr)
-    elif rsi > 60 and macd < signal_macd and close >= bollinger_upper * 0.99:
-        signal = "VENTE"
-        sl = close + (1.5 * atr)
-        tp = close - (3.0 * atr)
+    if TYPE_SL_TP == "Pourcentage Fixe":
+        sl_pct = config.get("stop_loss_pct", 2.0)
+        tp_pct = config.get("take_profit_pct", 4.0)
+        sl_price = current_price * (1 - sl_pct / 100)
+        tp_price = current_price * (1 + tp_pct / 100)
     else:
-        sl, tp = 0.0, 0.0
+        mult_sl = config.get("atr_mult_sl", 1.5)
+        mult_tp = config.get("atr_mult_tp", 3.0)
+        sl_price = current_price - (current_atr * mult_sl)
+        tp_price = current_price + (current_atr * mult_tp)
 
-    return signal, close, sl, tp
+    montant_risque = CAPITAL * (RISQUE_PCT / 100)
+    sl_dist = current_price - sl_price
+    position_size_crypto = montant_risque / sl_dist if sl_dist > 0 else 0
+    position_size_usd = position_size_crypto * current_price
 
-def calculer_taille_position(capital, risque_pct, prix_entree, stop_loss):
-    distance_sl_pct = abs(prix_entree - stop_loss) / prix_entree
-    if distance_sl_pct == 0:
-        return 0.0, 0.0
-    montant_risque_usd = capital * (risque_pct / 100.0)
-    position_usd = montant_risque_usd / distance_sl_pct
-    return round(position_usd, 2), round(montant_risque_usd, 2)
+    signal = None
+    if current_rsi < 30:
+        signal = "ACHAT (Survendu)"
+    elif current_rsi > 70:
+        signal = "VENTE (Suraheté)"
 
-def envoyer_email_alerte(symbol, signal_type, prix, sl, tp, pos_usd, risque_usd):
-    api_key = os.getenv("RESEND_API_KEY")
-    to_email = os.getenv("TO_EMAIL")
+    print(
+        f"📊 Analyse YouHolder {SYMBOL} ({TIMEFRAME}) | Prix: ${current_price:,.4f} | RSI: {current_rsi:.1f}"
+    )
+
+    if signal:
+        send_email_alert(
+            signal,
+            current_price,
+            tp_price,
+            sl_price,
+            position_size_usd,
+            montant_risque,
+        )
+    else:
+        print("⏸️ Aucun signal sur cet intervalle.")
+
+
+def send_email_alert(signal, price, tp, sl, pos_usd, risk_usd):
+    api_key = os.environ.get("RESEND_API_KEY")
+    to_email = os.environ.get("TO_EMAIL")
 
     if not api_key or not to_email:
-        print("⚠️ Variables d'environnement RESEND_API_KEY ou TO_EMAIL manquantes.")
+        print("❌ Variables d'environnement RESEND manquantes.")
         return
 
     resend.api_key = api_key
 
-    contenu_html = f"""
-    <h2>🚨 Signal Crypto Automatique : {signal_type} sur {symbol}</h2>
-    <p>Alerte détectée lors du scan horaire automatique.</p>
-    <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse;">
-      <tr><td><b>Paire</b></td><td>{symbol}</td></tr>
-      <tr><td><b>Signal</b></td><td><b>{signal_type}</b></td></tr>
-      <tr><td><b>Prix d'entrée</b></td><td>${prix:,.2f}</td></tr>
-      <tr><td><b>Stop-Loss (SL)</b></td><td>${sl:,.2f}</td></tr>
-      <tr><td><b>Take-Profit (TP)</b></td><td>${tp:,.2f}</td></tr>
-      <tr style="background-color: #f2f2f2;">
-        <td><b>Taille de position suggérée</b></td>
-        <td><b>${pos_usd:,.2f}</b></td>
-      </tr>
-      <tr style="background-color: #ffe6e6;">
-        <td><b>Risque ($)</b></td>
-        <td><b>${risque_usd:,.2f}</b></td>
-      </tr>
-    </table>
+    html_content = f"""
+    <h2>🚨 ALERTE SIGNAL YOUHOLDER : {SYMBOL}</h2>
+    <p><b>Signal :</b> {signal}</p>
+    <p><b>Unité de temps :</b> {TIMEFRAME}</p>
+    <p><b>Prix d'entrée :</b> ${price:,.4f}</p>
+    <hr>
+    <h3>🎯 Plan de Trade</h3>
+    <p><b>Take Profit (TP) :</b> ${tp:,.4f}</p>
+    <p><b>Stop Loss (SL) :</b> ${sl:,.4f}</p>
+    <p><b>Taille de Position :</b> ${pos_usd:,.2f} (Risque engagé : ${risk_usd:,.2f})</p>
     """
 
-    resend.Emails.send({
-        "from": "Scanner Crypto <onboarding@resend.dev>",
-        "to": [to_email],
-        "subject": f"[{signal_type}] {symbol} - Taille position : ${pos_usd:,.0f}",
-        "html": contenu_html
-    })
-    print(f"📧 Email envoyé pour {symbol} !")
+    try:
+        resend.Emails.send(
+            {
+                "from": "Bot YouHolder <onboarding@resend.dev>",
+                "to": [to_email],
+                "subject": f"🤖 SIGNAL YOUHOLDER {SYMBOL} - {signal}",
+                "html": html_content,
+            }
+        )
+        print("📧 Email d'alerte envoyé !")
+    except Exception as e:
+        print(f"❌ Erreur lors de l'envoi : {e}")
 
-# --- EXECUTION ---
+
 if __name__ == "__main__":
-    print("🔍 Lancement du scanner automatique GitHub Actions...")
-    for symbol in SYMBOLES:
-        try:
-            df = charger_donnees(symbol, TIMEFRAME)
-            df = calculer_indicateurs(df)
-            signal, prix, sl, tp = analyser_signal(df)
-            
-            if signal in ["ACHAT", "VENTE"]:
-                print(f"🎯 Signal {signal} trouvé sur {symbol} !")
-                pos_usd, risque_usd = calculer_taille_position(CAPITAL_TOTAL, RISQUE_PCT, prix, sl)
-                envoyer_email_alerte(symbol, signal, prix, sl, tp, pos_usd, risque_usd)
-            else:
-                print(f"⚪ {symbol} : Aucun signal.")
-        except Exception as e:
-            print(f"❌ Erreur sur {symbol} : {e}")
+    analyze_market()
 
