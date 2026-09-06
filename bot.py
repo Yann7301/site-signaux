@@ -33,14 +33,14 @@ def load_config():
         pass
 
     return {
-        "timeframe": config.get("timeframe", "15m"),
+        "timeframe": config.get("timeframe", "1h"),
         "capital_initial": config.get("capital_initial", 1000.0),
         "type_sl_tp": config.get("type_sl_tp", "Pourcentage Fixe"),
         "stop_loss_pct": config.get("stop_loss_pct", 1.5),
         "take_profit_pct": config.get("take_profit_pct", 3.0),
         "rsi_period": config.get("rsi_period", 14),
-        "rsi_oversold": config.get("rsi_oversold", 40),
-        "rsi_overbought": config.get("rsi_overbought", 60),
+        "rsi_oversold": config.get("rsi_oversold", 30),
+        "rsi_overbought": config.get("rsi_overbought", 70),
         "atr_period": config.get("atr_period", 14),
         "atr_mult_sl": config.get("atr_mult_sl", 1.5),
         "atr_mult_tp": config.get("atr_mult_tp", 3.0),
