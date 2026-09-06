@@ -12,7 +12,7 @@ st.title("📊 Scanner de Trading Crypto (Top 100 Coinbase)")
 # --- BARRE LATÉRALE : PARAMÈTRES ---
 st.sidebar.header("⚙️ Configuration des Signaux")
 
-timeframe = st.sidebar.selectbox("Timeframe", ["15m", "1h", "4h", "1d"], index=1)
+timeframe = st.sidebar.selectbox("Timeframe du Scan", ["15m", "1h", "4h", "1d"], index=1)
 capital_initial = st.sidebar.number_input("Capital initial ($)", value=100.0, step=10.0)
 risque_pct = st.sidebar.number_input("Risque par trade (%)", value=1.0, step=0.5)
 
@@ -52,7 +52,7 @@ PAIRS_TOP_100 = [
 # --- RÉCUPÉRATION DES DONNÉES ---
 @st.cache_data(ttl=60)
 def fetch_data(symbol, interval):
-    granularity_map = {"15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
+    granularity_map = {"5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
     granularity = granularity_map.get(interval, 3600)
     url = f"https://api.exchange.coinbase.com/products/{symbol}/candles?granularity={granularity}"
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -214,10 +214,21 @@ if st.button("🔄 Lancer le Scan du Marché (Top 100)", type="primary"):
 st.markdown("---")
 st.subheader("📈 Graphique Interactif des Bougies & Signaux")
 
-selected_pair = st.selectbox("Sélectionnez une crypto-monnaie du Top 100 :", PAIRS_TOP_100, index=0)
+col_pair, col_tf = st.columns([2, 3])
+
+with col_pair:
+    selected_pair = st.selectbox("Crypto-monnaie :", PAIRS_TOP_100, index=0)
+
+with col_tf:
+    chart_timeframe = st.radio(
+        "Unité de temps du graphique :",
+        ["5m", "15m", "30m", "1h", "4h", "1d"],
+        index=3,
+        horizontal=True
+    )
 
 if selected_pair:
-    chart_df = fetch_data(selected_pair, timeframe)
+    chart_df = fetch_data(selected_pair, chart_timeframe)
 
     if not chart_df.empty and len(chart_df) >= 201:
         chart_df = calculate_indicators(chart_df)
@@ -326,5 +337,5 @@ if selected_pair:
         col5.metric("Statut Actuel", status)
 
     else:
-        st.warning(f"Données insuffisantes pour afficher le graphique de {selected_pair}.")
+        st.warning(f"Données insuffisantes pour afficher le graphique de {selected_pair} en {chart_timeframe}.")
 
