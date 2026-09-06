@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import requests
 import time
-import plotly.graph_objects as go
+from streamlit_echarts import st_echarts
 
 st.set_page_config(page_title="Crypto Scanner Pro", layout="wide")
 
@@ -210,7 +210,7 @@ if st.button("🔄 Lancer le Scan du Marché (Top 100)", type="primary"):
     else:
         st.info("Aucune donnée disponible pour le moment.")
 
-# --- VOLET ROULANT & GRAPHIQUE BOUGIES ---
+# --- VOLET ROULANT & GRAPHIQUE BOUGIES (ECHARTS) ---
 st.markdown("---")
 st.subheader("📈 Graphique Interactif des Bougies & Signaux")
 
@@ -222,69 +222,109 @@ if selected_pair:
     if not chart_df.empty and len(chart_df) >= 201:
         chart_df = calculate_indicators(chart_df)
 
-        # Détection des signaux historiques sur l'ensemble des bougies
-        buy_signals_x = []
-        buy_signals_y = []
-        sell_signals_x = []
-        sell_signals_y = []
+        # Préparation des données pour ECharts : [ouvert, ferme, bas, haut]
+        dates = chart_df['timestamp'].dt.strftime('%Y-%m-%d %H:%M').tolist()
+        kline_data = chart_df[['open', 'close', 'low', 'high']].values.tolist()
 
+        # Signaux historiques
+        signals_points = []
         for i in range(200, len(chart_df)):
             p = chart_df['close'].iloc[i]
             r = chart_df['RSI'].iloc[i]
             e = chart_df['EMA200'].iloc[i]
-            t = chart_df['timestamp'].iloc[i]
+            date_str = dates[i]
 
             if not pd.isna(r) and not pd.isna(e):
                 if r < rsi_oversold and (not use_ema_filter or p > e):
-                    buy_signals_x.append(t)
-                    buy_signals_y.append(chart_df['low'].iloc[i] * 0.995)
+                    signals_points.append({
+                        "name": "ACHAT",
+                        "coord": [date_str, chart_df['low'].iloc[i] * 0.995],
+                        "value": "🟢 ACHAT",
+                        "itemStyle": {"color": "#28a745"}
+                    })
                 elif r > rsi_overbought and (not use_ema_filter or p < e):
-                    sell_signals_x.append(t)
-                    sell_signals_y.append(chart_df['high'].iloc[i] * 1.005)
+                    signals_points.append({
+                        "name": "VENTE",
+                        "coord": [date_str, chart_df['high'].iloc[i] * 1.005],
+                        "value": "🔴 VENTE",
+                        "itemStyle": {"color": "#dc3545"}
+                    })
 
-        fig = go.Figure()
+        # Configuration ECharts
+        option = {
+            "backgroundColor": "#111827",
+            "tooltip": {
+                "trigger": "axis",
+                "axisPointer": {"type": "cross"}
+            },
+            "grid": {
+                "left": "5%",
+                "right": "5%",
+                "bottom": "15%",
+                "top": "5%"
+            },
+            "xAxis": {
+                "type": "category",
+                "data": dates,
+                "scale": True,
+                "boundaryGap": False,
+                "axisLine": {"onZero": False},
+                "splitLine": {"show": False}
+            },
+            "yAxis": {
+                "scale": True,
+                "splitArea": {"show": True}
+            },
+            "dataZoom": [
+                {"type": "inside", "start": 70, "end": 100},
+                {"type": "slider", "start": 70, "end": 100}
+            ],
+            "series": [
+                {
+                    "name": selected_pair,
+                    "type": "candlestick",
+                    "data": kline_data,
+                    "itemStyle": {
+                        "color": "#06d6a0",
+                        "color0": "#ef476f",
+                        "borderColor": "#06d6a0",
+                        "borderColor0": "#ef476f"
+                    },
+                    "markPoint": {
+                        "data": signals_points,
+                        "label": {"formatter": "{b}"}
+                    }
+                }
+            ]
+        }
 
-        # Graphique en bougies uniquement
-        fig.add_trace(go.Candlestick(
-            x=chart_df['timestamp'],
-            open=chart_df['open'],
-            high=chart_df['high'],
-            low=chart_df['low'],
-            close=chart_df['close'],
-            name="Prix"
-        ))
+        # Rendu du graphique
+        st_echarts(options=option, height="500px")
 
-        # Affichage des signaux d'achat
-        if buy_signals_x:
-            fig.add_trace(go.Scatter(
-                x=buy_signals_x,
-                y=buy_signals_y,
-                mode='markers',
-                marker=dict(symbol='triangle-up', size=12, color='green'),
-                name='Signal ACHAT'
-            ))
+        # --- RECAPITULATIF DES INFOS CLES (EN BAS DU GRAPHIQUE) ---
+        last_price = chart_df['close'].iloc[-1]
+        prev_price = chart_df['close'].iloc[-2]
+        var_pct = ((last_price - prev_price) / prev_price) * 100
 
-        # Affichage des signaux de vente
-        if sell_signals_x:
-            fig.add_trace(go.Scatter(
-                x=sell_signals_x,
-                y=sell_signals_y,
-                mode='markers',
-                marker=dict(symbol='triangle-down', size=12, color='red'),
-                name='Signal VENTE'
-            ))
+        last_rsi = chart_df['RSI'].iloc[-1]
+        last_ema = chart_df['EMA200'].iloc[-1]
+        last_atr = chart_df['ATR'].iloc[-1]
 
-        fig.update_layout(
-            title=f"Graphique {selected_pair} ({timeframe})",
-            yaxis_title="Prix ($)",
-            xaxis_title="Date / Heure",
-            xaxis_rangeslider_visible=False,
-            template="plotly_dark",
-            height=650,
-            margin=dict(l=20, r=20, t=50, b=20)
-        )
+        # Détermination du statut
+        if last_rsi < rsi_oversold and (not use_ema_filter or last_price > last_ema):
+            status = "🟢 Signal ACHAT"
+        elif last_rsi > rsi_overbought and (not use_ema_filter or last_price < last_ema):
+            status = "🔴 Signal VENTE"
+        else:
+            status = "⚪ NEUTRE"
 
-        st.plotly_chart(fig, use_container_width=True)
+        col1, col2, col3, col4, col5 = st.columns(5)
+        col1.metric("Prix Actuel", f"${last_price:,.4f}", f"{var_pct:+.2f}%")
+        col2.metric("RSI (14)", f"{last_rsi:.1f}" if not pd.isna(last_rsi) else "N/A")
+        col3.metric("EMA 200", f"${last_ema:,.4f}" if not pd.isna(last_ema) else "N/A")
+        col4.metric("ATR (14)", f"${last_atr:,.4f}" if not pd.isna(last_atr) else "N/A")
+        col5.metric("Statut Actuel", status)
+
     else:
         st.warning(f"Données insuffisantes pour afficher le graphique de {selected_pair}.")
 
