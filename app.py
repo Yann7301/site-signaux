@@ -12,7 +12,7 @@ st.title("📊 Scanner de Trading Crypto (Top 100 Coinbase)")
 # --- BARRE LATÉRALE : PARAMÈTRES ---
 st.sidebar.header("⚙️ Configuration des Signaux")
 
-timeframe = st.sidebar.selectbox("Timeframe du Scan", ["15m", "1h", "4h", "1d"], index=1)
+timeframe = st.sidebar.selectbox("Timeframe du Scan", ["15m", "30m", "1h", "4h", "1d"], index=2)
 capital_initial = st.sidebar.number_input("Capital initial ($)", value=100.0, step=10.0)
 risque_pct = st.sidebar.number_input("Risque par trade (%)", value=1.0, step=0.5)
 
@@ -49,11 +49,22 @@ PAIRS_TOP_100 = [
     "REZ-USD", "BB-USD", "NOT-USD", "IO-USD", "ZK-USD", "ZRO-USD", "RARE-USD", "GVT-USD", "POL-USD", "SUPER-USD"
 ]
 
-# --- RÉCUPÉRATION DES DONNÉES ---
+# --- RÉCUPÉRATION ET AGRÉGATION DES BOUGIES ---
 @st.cache_data(ttl=60)
 def fetch_data(symbol, interval):
-    granularity_map = {"5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
-    granularity = granularity_map.get(interval, 3600)
+    # Map des granularités réelles Coinbase (300, 900, 3600, 86400)
+    # Pour 30m, on récupère du 15m (900s) qu'on agrège.
+    # Pour 4h, on récupère du 1h (3600s) qu'on agrège.
+    base_granularity_map = {
+        "5m": 300,
+        "15m": 900,
+        "30m": 900,   # Récupère du 15m
+        "1h": 3600,
+        "4h": 3600,   # Récupère du 1h
+        "1d": 86400
+    }
+    
+    granularity = base_granularity_map.get(interval, 3600)
     url = f"https://api.exchange.coinbase.com/products/{symbol}/candles?granularity={granularity}"
     headers = {"User-Agent": "Mozilla/5.0"}
 
@@ -67,6 +78,19 @@ def fetch_data(symbol, interval):
                 df = df.sort_values('timestamp').reset_index(drop=True)
                 cols = ['open', 'high', 'low', 'close', 'volume']
                 df[cols] = df[cols].astype(float)
+                
+                # Resampling dynamique si 30m ou 4h
+                if interval in ["30m", "4h"]:
+                    df.set_index('timestamp', inplace=True)
+                    rule = '30min' if interval == "30m" else '4h'
+                    df = df.resample(rule).agg({
+                        'open': 'first',
+                        'high': 'max',
+                        'low': 'min',
+                        'close': 'last',
+                        'volume': 'sum'
+                    }).dropna().reset_index()
+
                 return df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
     except Exception as e:
         st.error(f"Erreur lors de la récupération de {symbol} : {e}")
@@ -92,7 +116,7 @@ def calculate_indicators(df):
     true_range = np.max(ranges, axis=1)
     df['ATR'] = true_range.rolling(14).mean()
 
-    # EMA 200 (calculée sur au moins autant de périodes que possible)
+    # EMA 200 (s'adapte à la longueur du DataFrame)
     ema_span = min(200, len(df))
     df['EMA200'] = df['close'].ewm(span=ema_span, adjust=False).mean()
 
@@ -109,14 +133,14 @@ if st.button("🔄 Lancer le Scan du Marché (Top 100)", type="primary"):
 
     for idx, symbol in enumerate(PAIRS_TOP_100):
         df = fetch_data(symbol, timeframe)
-        if not df.empty and len(df) >= 50:
+        if not df.empty and len(df) >= 20:
             df = calculate_indicators(df)
 
-            # Analyse sur la dernière bougie clôturée (index -2)
-            price = df['close'].iloc[-2]
-            rsi = df['RSI'].iloc[-2]
-            atr = df['ATR'].iloc[-2] if not pd.isna(df['ATR'].iloc[-2]) else 0
-            ema200 = df['EMA200'].iloc[-2]
+            # Analyse de la dernière bougie
+            price = df['close'].iloc[-1]
+            rsi = df['RSI'].iloc[-1]
+            atr = df['ATR'].iloc[-1] if not pd.isna(df['ATR'].iloc[-1]) else 0
+            ema200 = df['EMA200'].iloc[-1]
 
             if not pd.isna(rsi) and not pd.isna(ema200):
                 is_buy = rsi < rsi_oversold and (not use_ema_filter or price > ema200)
@@ -177,7 +201,7 @@ if st.button("🔄 Lancer le Scan du Marché (Top 100)", type="primary"):
                     })
 
         progress_bar.progress((idx + 1) / total_pairs)
-        time.sleep(0.15)
+        time.sleep(0.05)
 
     progress_bar.empty()
 
@@ -224,21 +248,21 @@ with col_tf:
     chart_timeframe = st.radio(
         "Unité de temps du graphique :",
         ["5m", "15m", "30m", "1h", "4h", "1d"],
-        index=3,
+        index=2,
         horizontal=True
     )
 
 if selected_pair:
     chart_df = fetch_data(selected_pair, chart_timeframe)
 
-    if not chart_df.empty and len(chart_df) >= 50:
+    if not chart_df.empty and len(chart_df) >= 20:
         chart_df = calculate_indicators(chart_df)
 
         # Préparation des données pour ECharts : [ouvert, ferme, bas, haut]
         dates = chart_df['timestamp'].dt.strftime('%Y-%m-%d %H:%M').tolist()
         kline_data = chart_df[['open', 'close', 'low', 'high']].values.tolist()
 
-        # Signaux historiques (calculés sur l'ensemble des données disponibles)
+        # Signaux historiques
         signals_points = []
         start_idx = max(14, len(chart_df) - 200)
         for i in range(start_idx, len(chart_df)):
@@ -289,8 +313,8 @@ if selected_pair:
                 "splitArea": {"show": True}
             },
             "dataZoom": [
-                {"type": "inside", "start": 50, "end": 100},
-                {"type": "slider", "start": 50, "end": 100}
+                {"type": "inside", "start": 30, "end": 100},
+                {"type": "slider", "start": 30, "end": 100}
             ],
             "series": [
                 {
@@ -314,7 +338,7 @@ if selected_pair:
         # Rendu du graphique
         st_echarts(options=option, height="500px")
 
-        # --- RECAPITULATIF DES INFOS CLES (EN BAS DU GRAPHIQUE) ---
+        # --- RÉCAPITULATIF DES INFOS CLÉS (EN BAS DU GRAPHIQUE) ---
         last_price = chart_df['close'].iloc[-1]
         prev_price = chart_df['close'].iloc[-2] if len(chart_df) > 1 else last_price
         var_pct = ((last_price - prev_price) / prev_price) * 100 if prev_price != 0 else 0
@@ -323,7 +347,6 @@ if selected_pair:
         last_ema = chart_df['EMA200'].iloc[-1]
         last_atr = chart_df['ATR'].iloc[-1]
 
-        # Détermination du statut
         if last_rsi < rsi_oversold and (not use_ema_filter or last_price > last_ema):
             status = "🟢 Signal ACHAT"
         elif last_rsi > rsi_overbought and (not use_ema_filter or last_price < last_ema):
