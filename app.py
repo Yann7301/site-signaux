@@ -109,7 +109,7 @@ if st.button("🔄 Lancer le Scan du Marché (Top 100)", type="primary"):
         df = fetch_data(symbol, timeframe)
         if not df.empty and len(df) >= 201:
             df = calculate_indicators(df)
-            
+
             # Analyse sur la dernière bougie clôturée (index -2)
             price = df['close'].iloc[-2]
             rsi = df['RSI'].iloc[-2]
@@ -189,13 +189,16 @@ if st.button("🔄 Lancer le Scan du Marché (Top 100)", type="primary"):
     if all_results:
         res_df = pd.DataFrame(all_results).drop(columns=["RSI_val"])
 
-        def highlight_signal(val):
-            if isinstance(val, str):
+        # Fonction de formatage universelle sans dépendance complexe à pandas.Styler
+        def style_dataframe(df):
+            def highlight(row):
+                val = row['Signal']
                 if "ACHAT" in val:
-                    return 'background-color: #d4edda; color: #155724; font-weight: bold;'
+                    return ['background-color: #d4edda; color: #155724; font-weight: bold;' if col == 'Signal' else '' for col in row.index]
                 elif "VENTE" in val:
-                    return 'background-color: #f8d7da; color: #721c24; font-weight: bold;'
-            return ''
+                    return ['background-color: #f8d7da; color: #721c24; font-weight: bold;' if col == 'Signal' else '' for col in row.index]
+                return ['' for _ in row.index]
+            return df.style.apply(highlight, axis=1)
 
         total_signals = len(buy_signals) + len(sell_signals)
         if total_signals > 0:
@@ -203,7 +206,7 @@ if st.button("🔄 Lancer le Scan du Marché (Top 100)", type="primary"):
         else:
             st.info("Aucun signal actif pour le moment. Affichage des cryptos neutres.")
 
-        st.dataframe(res_df.style.applymap(highlight_signal, subset=['Signal']), use_container_width=True, height=800)
+        # Affichage sécurisé compatible avec toutes les versions Streamlit et Pandas
+        st.dataframe(style_dataframe(res_df), use_container_width=True, height=800)
     else:
         st.info("Aucune donnée disponible pour le moment.")
-
