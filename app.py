@@ -32,14 +32,14 @@ else:
     atr_period = st.sidebar.slider("Période ATR", 5, 30, 14)
     atr_mult_sl = st.sidebar.number_input("Multiplicateur ATR SL", value=1.5, step=0.1)
     atr_mult_tp = st.sidebar.number_input("Multiplicateur ATR TP", value=3.0, step=0.1)
-    stop_loss_pct, take_profit_pct = 1.5, 3.0
+    stop_loss_pct, take_profit_pct = 2.0, 6.0
 
-# --- LISTE DES PAIRES (TOP 100 COINBASE - ZEC INCLUS, SHIB EXCLU) ---
+# --- LISTE DES PAIRES (TOP 100 COINBASE - RNDR RETIRÉ) ---
 PAIRS_TOP_100 = [
     "BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "AVAX-USD", "DOT-USD", "LINK-USD", "LTC-USD", "BCH-USD", "UNI-USD",
     "ATOM-USD", "XLM-USD", "ETC-USD", "NEAR-USD", "ALGO-USD", "ICP-USD", "FIL-USD", "APT-USD", "OP-USD", "ARB-USD",
     "LDO-USD", "INJ-USD", "TIA-USD", "SUI-USD", "RENDER-USD", "PEPE-USD", "DOGE-USD", "FET-USD", "AAVE-USD", "ZEC-USD",
-    "STX-USD", "CRV-USD", "MKR-USD", "GRT-USD", "RNDR-USD", "SNX-USD", "THETA-USD", "QNT-USD", "FTM-USD", "FLOW-USD",
+    "STX-USD", "CRV-USD", "MKR-USD", "GRT-USD", "SNX-USD", "THETA-USD", "QNT-USD", "FTM-USD", "FLOW-USD",
     "AXS-USD", "SAND-USD", "MANA-USD", "EGLD-USD", "CHZ-USD", "KSM-USD", "COMP-USD", "DASH-USD", "ENJ-USD", "1INCH-USD",
     "BAT-USD", "LRC-USD", "ANKR-USD", "STORJ-USD", "BAL-USD", "YFI-USD", "UMA-USD", "ZRX-USD", "KAVA-USD", "SKL-USD",
     "RLC-USD", "BAND-USD", "NMR-USD", "CVC-USD", "OXT-USD", "POLS-USD", "ACH-USD", "SPELL-USD", "API3-USD", "BLUR-USD",
@@ -107,12 +107,14 @@ if st.button("🔄 Lancer le Scan du Marché (Top 100)", type="primary"):
 
     for idx, symbol in enumerate(PAIRS_TOP_100):
         df = fetch_data(symbol, timeframe)
-        if not df.empty and len(df) >= 200:
+        if not df.empty and len(df) >= 201:
             df = calculate_indicators(df)
-            price = df['close'].iloc[-1]
-            rsi = df['RSI'].iloc[-1]
-            atr = df['ATR'].iloc[-1] if not pd.isna(df['ATR'].iloc[-1]) else 0
-            ema200 = df['EMA200'].iloc[-1]
+            
+            # Analyse sur la dernière bougie clôturée (index -2)
+            price = df['close'].iloc[-2]
+            rsi = df['RSI'].iloc[-2]
+            atr = df['ATR'].iloc[-2] if not pd.isna(df['ATR'].iloc[-2]) else 0
+            ema200 = df['EMA200'].iloc[-2]
 
             if not pd.isna(rsi) and not pd.isna(ema200):
                 is_buy = rsi < rsi_oversold and (not use_ema_filter or price > ema200)
@@ -173,26 +175,26 @@ if st.button("🔄 Lancer le Scan du Marché (Top 100)", type="primary"):
                     })
 
         progress_bar.progress((idx + 1) / total_pairs)
-        time.sleep(0.12)  # Pause anti-blocage API Coinbase
+        time.sleep(0.15)
 
     progress_bar.empty()
 
-    # Tri par RSI croissant (du plus petit au plus grand)
+    # Tri par RSI croissant
     buy_signals = sorted(buy_signals, key=lambda x: x["RSI_val"])
     sell_signals = sorted(sell_signals, key=lambda x: x["RSI_val"])
     neutral_signals = sorted(neutral_signals, key=lambda x: x["RSI_val"])
 
-    # Fusion : Achats -> Ventes -> Neutres
     all_results = buy_signals + sell_signals + neutral_signals
 
     if all_results:
         res_df = pd.DataFrame(all_results).drop(columns=["RSI_val"])
 
         def highlight_signal(val):
-            if "ACHAT" in val:
-                return 'background-color: #d4edda; color: #155724; font-weight: bold;'
-            elif "VENTE" in val:
-                return 'background-color: #f8d7da; color: #721c24; font-weight: bold;'
+            if isinstance(val, str):
+                if "ACHAT" in val:
+                    return 'background-color: #d4edda; color: #155724; font-weight: bold;'
+                elif "VENTE" in val:
+                    return 'background-color: #f8d7da; color: #721c24; font-weight: bold;'
             return ''
 
         total_signals = len(buy_signals) + len(sell_signals)
@@ -201,7 +203,7 @@ if st.button("🔄 Lancer le Scan du Marché (Top 100)", type="primary"):
         else:
             st.info("Aucun signal actif pour le moment. Affichage des cryptos neutres.")
 
-        st.dataframe(res_df.style.map(highlight_signal, subset=['Signal']), use_container_width=True, height=800)
+        st.dataframe(res_df.style.applymap(highlight_signal, subset=['Signal']), use_container_width=True, height=800)
     else:
         st.info("Aucune donnée disponible pour le moment.")
 

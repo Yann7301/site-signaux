@@ -33,12 +33,12 @@ def load_config():
         "telegram_chat_id": ""
     }
 
-# --- LISTE DES PAIRES (TOP 100 COINBASE - ZEC INCLUS, SHIB EXCLU) ---
+# --- LISTE DES PAIRES (TOP 100 COINBASE - RNDR RETIRÉ) ---
 PAIRS_TOP_100 = [
     "BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "AVAX-USD", "DOT-USD", "LINK-USD", "LTC-USD", "BCH-USD", "UNI-USD",
     "ATOM-USD", "XLM-USD", "ETC-USD", "NEAR-USD", "ALGO-USD", "ICP-USD", "FIL-USD", "APT-USD", "OP-USD", "ARB-USD",
     "LDO-USD", "INJ-USD", "TIA-USD", "SUI-USD", "RENDER-USD", "PEPE-USD", "DOGE-USD", "FET-USD", "AAVE-USD", "ZEC-USD",
-    "STX-USD", "CRV-USD", "MKR-USD", "GRT-USD", "RNDR-USD", "SNX-USD", "THETA-USD", "QNT-USD", "FTM-USD", "FLOW-USD",
+    "STX-USD", "CRV-USD", "MKR-USD", "GRT-USD", "SNX-USD", "THETA-USD", "QNT-USD", "FTM-USD", "FLOW-USD",
     "AXS-USD", "SAND-USD", "MANA-USD", "EGLD-USD", "CHZ-USD", "KSM-USD", "COMP-USD", "DASH-USD", "ENJ-USD", "1INCH-USD",
     "BAT-USD", "LRC-USD", "ANKR-USD", "STORJ-USD", "BAL-USD", "YFI-USD", "UMA-USD", "ZRX-USD", "KAVA-USD", "SKL-USD",
     "RLC-USD", "BAND-USD", "NMR-USD", "CVC-USD", "OXT-USD", "POLS-USD", "ACH-USD", "SPELL-USD", "API3-USD", "BLUR-USD",
@@ -99,8 +99,8 @@ def send_telegram(signals, config):
 
     tf = config.get('timeframe', '1h')
     cap = config.get('capital_initial', 100.0)
-    message = f"🚨 *ALERTES SCANNER CRYPTO (Top 100)* ({len(signals)})\n"
-    message += f"⏱ *Timeframe :* `{tf}` | *Capital :* `${cap}`\n"
+    message = f"🚨 <b>ALERTES SCANNER CRYPTO (Top 100)</b> ({len(signals)})\n"
+    message += f"⏱ <b>Timeframe :</b> <code>{tf}</code> | <b>Capital :</b> <code>${cap}</code>\n"
     message += "-----------------------------------\n\n"
 
     for s in signals:
@@ -113,18 +113,18 @@ def send_telegram(signals, config):
         tp = s['Take Profit']
         sl = s['Stop Loss']
 
-        message += f"🪙 *{crypto}* | {sig}\n"
-        message += f"💵 *Prix d'entrée :* `{entry_price}`\n"
-        message += f"📊 *RSI :* `{rsi_val}` | *EMA 200 :* `{ema_val}` ({tend})\n"
-        message += f"🎯 *Take Profit :* `{tp}`\n"
-        message += f"🛑 *Stop Loss :* `{sl}`\n"
+        message += f"🪙 <b>{crypto}</b> | {sig}\n"
+        message += f"💵 <b>Prix d'entrée :</b> <code>{entry_price}</code>\n"
+        message += f"📊 <b>RSI :</b> <code>{rsi_val}</code> | <b>EMA 200 :</b> <code>{ema_val}</code> ({tend})\n"
+        message += f"🎯 <b>Take Profit :</b> <code>{tp}</code>\n"
+        message += f"🛑 <b>Stop Loss :</b> <code>{sl}</code>\n"
         message += "-----------------------------------\n"
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {
         "chat_id": chat_id,
         "text": message,
-        "parse_mode": "Markdown"
+        "parse_mode": "HTML"
     }
 
     try:
@@ -146,13 +146,16 @@ def main():
 
     for symbol in PAIRS_TOP_100:
         df = fetch_data(symbol, config["timeframe"])
-        if not df.empty and len(df) >= 200:
+        
+        # On vérifie qu'on a assez de bougies pour calculer l'EMA200 et prendre iloc[-2]
+        if not df.empty and len(df) >= 201:
             df = calculate_indicators(df, config)
 
-            price = df['close'].iloc[-1]
-            rsi = df['RSI'].iloc[-1]
-            atr = df['ATR'].iloc[-1] if not pd.isna(df['ATR'].iloc[-1]) else 0
-            ema200 = df['EMA200'].iloc[-1]
+            # Prise en compte de la dernière bougie CLÔTURÉE (index -2)
+            price = df['close'].iloc[-2]
+            rsi = df['RSI'].iloc[-2]
+            atr = df['ATR'].iloc[-2] if not pd.isna(df['ATR'].iloc[-2]) else 0
+            ema200 = df['EMA200'].iloc[-2]
 
             if not pd.isna(rsi) and not pd.isna(ema200):
                 trend = "🟢 Haussière" if price > ema200 else "🔴 Baissière"
@@ -183,7 +186,7 @@ def main():
                 elif is_sell:
                     if config["type_sl_tp"] == "Pourcentage Fixe":
                         sl_price = price * (1 + config["stop_loss_pct"] / 100)
-                        tp_price = price * (1 - config["take_profit_pct"] / 100)
+                        tp_price = price - (config["take_profit_pct"] / 100 * price)
                     else:
                         sl_price = price + (atr * config["atr_mult_sl"])
                         tp_price = price - (atr * config["atr_mult_tp"])
@@ -200,9 +203,9 @@ def main():
                         "Stop Loss": f"${sl_price:,.4f}"
                     })
 
-        time.sleep(0.12)
+        time.sleep(0.15)
 
-    # Tri par RSI croissant (du plus petit au plus grand)
+    # Tri par RSI croissant
     buy_signals = sorted(buy_signals, key=lambda x: x["RSI_val"])
     sell_signals = sorted(sell_signals, key=lambda x: x["RSI_val"])
 
