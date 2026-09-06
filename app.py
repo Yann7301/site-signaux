@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
+import time
 
 st.set_page_config(page_title="Crypto Scanner Pro", layout="wide")
 
@@ -39,7 +40,7 @@ PAIRS_TOP_30 = [
     "ATOM-USD", "XLM-USD", "ETC-USD", "NEAR-USD", "ALGO-USD",
     "ICP-USD", "FIL-USD", "APT-USD", "OP-USD", "ARB-USD",
     "LDO-USD", "INJ-USD", "TIA-USD", "SUI-USD", "RENDER-USD",
-    "PEPE-USD", "DOGE-USD", "FET-USD", "AAVE-USD", "SHIB-USD"
+    "PEPE-USD", "DOGE-USD", "FET-USD", "AAVE-USD", "ZEC-USD"
 ]
 
 # --- RECUPERATION DES DONNEES ---
@@ -92,7 +93,9 @@ def calculate_indicators(df):
 
 # --- SCAN DU MARCHE ---
 if st.button("🔄 Lancer le Scan du Marché", type="primary"):
-    results = []
+    buy_signals = []
+    sell_signals = []
+    neutral_signals = []
 
     progress_bar = st.progress(0)
     for idx, symbol in enumerate(PAIRS_TOP_30):
@@ -108,7 +111,6 @@ if st.button("🔄 Lancer le Scan du Marché", type="primary"):
                 is_buy = rsi < rsi_oversold and (not use_ema_filter or price > ema200)
                 is_sell = rsi > rsi_overbought and (not use_ema_filter or price < ema200)
 
-                signal = "NEUTRE"
                 if is_buy:
                     signal = "🟢 ACHAT"
                     if type_sl_tp == "Pourcentage Fixe":
@@ -117,36 +119,68 @@ if st.button("🔄 Lancer le Scan du Marché", type="primary"):
                     else:
                         sl_price = price - (atr * atr_mult_sl)
                         tp_price = price + (atr * atr_mult_tp)
+
+                    buy_signals.append({
+                        "Crypto": symbol,
+                        "Prix": f"${price:,.4f}",
+                        "RSI_val": rsi,
+                        "RSI (14)": round(rsi, 1),
+                        "EMA 200": f"${ema200:,.4f}",
+                        "Signal": signal,
+                        "Take Profit": f"${tp_price:,.4f}",
+                        "Stop Loss": f"${sl_price:,.4f}"
+                    })
+
                 elif is_sell:
                     signal = "🔴 VENTE"
-                    # Vente (Short) : TP en-dessous du prix, SL au-dessus
                     if type_sl_tp == "Pourcentage Fixe":
                         sl_price = price * (1 + stop_loss_pct / 100)
                         tp_price = price * (1 - take_profit_pct / 100)
                     else:
                         sl_price = price + (atr * atr_mult_sl)
                         tp_price = price - (atr * atr_mult_tp)
+
+                    sell_signals.append({
+                        "Crypto": symbol,
+                        "Prix": f"${price:,.4f}",
+                        "RSI_val": rsi,
+                        "RSI (14)": round(rsi, 1),
+                        "EMA 200": f"${ema200:,.4f}",
+                        "Signal": signal,
+                        "Take Profit": f"${tp_price:,.4f}",
+                        "Stop Loss": f"${sl_price:,.4f}"
+                    })
+
                 else:
                     sl_price = price * (1 - stop_loss_pct / 100)
                     tp_price = price * (1 + take_profit_pct / 100)
-
-                results.append({
-                    "Crypto": symbol,
-                    "Prix": f"${price:,.4f}",
-                    "RSI (14)": round(rsi, 1),
-                    "EMA 200": f"${ema200:,.4f}",
-                    "Signal": signal,
-                    "Take Profit": f"${tp_price:,.4f}",
-                    "Stop Loss": f"${sl_price:,.4f}"
-                })
+                    neutral_signals.append({
+                        "Crypto": symbol,
+                        "Prix": f"${price:,.4f}",
+                        "RSI_val": rsi,
+                        "RSI (14)": round(rsi, 1),
+                        "EMA 200": f"${ema200:,.4f}",
+                        "Signal": "NEUTRE",
+                        "Take Profit": f"${tp_price:,.4f}",
+                        "Stop Loss": f"${sl_price:,.4f}"
+                    })
 
         progress_bar.progress((idx + 1) / len(PAIRS_TOP_30))
+        time.sleep(0.12)  # Pause anti-blocage API
 
     progress_bar.empty()
 
-    if results:
-        res_df = pd.DataFrame(results)
-        
+    # Tri par RSI croissant (du plus petit au plus grand)
+    buy_signals = sorted(buy_signals, key=lambda x: x["RSI_val"])
+    sell_signals = sorted(sell_signals, key=lambda x: x["RSI_val"])
+    neutral_signals = sorted(neutral_signals, key=lambda x: x["RSI_val"])
+
+    # Fusion : Achats -> Ventes -> Neutres
+    all_results = buy_signals + sell_signals + neutral_signals
+
+    if all_results:
+        res_df = pd.DataFrame(all_results).drop(columns=["RSI_val"])
+
         # Mise en valeur des signaux
         def highlight_signal(val):
             if "ACHAT" in val:
@@ -154,6 +188,13 @@ if st.button("🔄 Lancer le Scan du Marché", type="primary"):
             elif "VENTE" in val:
                 return 'background-color: #f8d7da; color: #721c24; font-weight: bold;'
             return ''
+
+        # Affichage du nombre de signaux trouvés
+        total_signals = len(buy_signals) + len(sell_signals)
+        if total_signals > 0:
+            st.success(f"🔥 {total_signals} signal/signaux actif(s) détecté(s) ({len(buy_signals)} Achats, {len(sell_signals)} Ventes)")
+        else:
+            st.info("Aucun signal actif pour le moment. Affichage des cryptos neutres.")
 
         st.dataframe(res_df.style.map(highlight_signal, subset=['Signal']), use_container_width=True, height=800)
     else:

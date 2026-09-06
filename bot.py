@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import requests
 import json
+import time
 import os
 
 # --- CHARGEMENT DE LA CONFIGURATION ---
@@ -14,8 +15,7 @@ def load_config():
                 return json.load(f)
         except Exception as e:
             print(f"Erreur lors de la lecture du fichier de configuration : {e}")
-    
-    # Valeurs par défaut si le fichier n'existe pas
+
     return {
         "timeframe": "1h",
         "capital_initial": 100.0,
@@ -40,7 +40,7 @@ PAIRS_TOP_30 = [
     "ATOM-USD", "XLM-USD", "ETC-USD", "NEAR-USD", "ALGO-USD",
     "ICP-USD", "FIL-USD", "APT-USD", "OP-USD", "ARB-USD",
     "LDO-USD", "INJ-USD", "TIA-USD", "SUI-USD", "RENDER-USD",
-    "PEPE-USD", "DOGE-USD", "FET-USD", "AAVE-USD", "SHIB-USD"
+    "PEPE-USD", "DOGE-USD", "FET-USD", "AAVE-USD", "ZEC-USD"
 ]
 
 # --- RECUPERATION DES DONNEES ---
@@ -131,8 +131,9 @@ def send_telegram(signals, config):
 def main():
     config = load_config()
     print(f"Lancement du scan... Timeframe: {config['timeframe']} | Filtre EMA 200: {config.get('use_ema_filter', True)}")
-    
-    signals = []
+
+    buy_signals = []
+    sell_signals = []
     use_ema_filter = config.get("use_ema_filter", True)
 
     for symbol in PAIRS_TOP_30:
@@ -152,7 +153,6 @@ def main():
                 is_sell = rsi > config.get("rsi_overbought", 70) and (not use_ema_filter or price < ema200)
 
                 if is_buy:
-                    # ACHAT (Long) : TP plus haut, SL plus bas
                     if config["type_sl_tp"] == "Pourcentage Fixe":
                         sl_price = price * (1 - config["stop_loss_pct"] / 100)
                         tp_price = price * (1 + config["take_profit_pct"] / 100)
@@ -160,10 +160,11 @@ def main():
                         sl_price = price - (atr * config["atr_mult_sl"])
                         tp_price = price + (atr * config["atr_mult_tp"])
 
-                    signals.append({
+                    buy_signals.append({
                         "Crypto": symbol,
                         "Signal": "🟢 ACHAT",
                         "Prix d'entrée": f"${price:,.4f}",
+                        "RSI_val": rsi,
                         "RSI": round(rsi, 1),
                         "EMA 200": f"${ema200:,.4f}",
                         "Tendance": trend,
@@ -172,7 +173,6 @@ def main():
                     })
 
                 elif is_sell:
-                    # VENTE (Short) : TP plus bas, SL plus haut
                     if config["type_sl_tp"] == "Pourcentage Fixe":
                         sl_price = price * (1 + config["stop_loss_pct"] / 100)
                         tp_price = price * (1 - config["take_profit_pct"] / 100)
@@ -180,10 +180,11 @@ def main():
                         sl_price = price + (atr * config["atr_mult_sl"])
                         tp_price = price - (atr * config["atr_mult_tp"])
 
-                    signals.append({
+                    sell_signals.append({
                         "Crypto": symbol,
                         "Signal": "🔴 VENTE",
                         "Prix d'entrée": f"${price:,.4f}",
+                        "RSI_val": rsi,
                         "RSI": round(rsi, 1),
                         "EMA 200": f"${ema200:,.4f}",
                         "Tendance": trend,
@@ -191,9 +192,18 @@ def main():
                         "Stop Loss": f"${sl_price:,.4f}"
                     })
 
-    if signals:
-        print(f"{len(signals)} signal/signaux trouvé(s). Envoi sur Telegram...")
-        send_telegram(signals, config)
+        time.sleep(0.12)  # Pause anti-blocage API
+
+    # Tri par RSI croissant (du plus petit au plus grand)
+    buy_signals = sorted(buy_signals, key=lambda x: x["RSI_val"])
+    sell_signals = sorted(sell_signals, key=lambda x: x["RSI_val"])
+
+    # Fusion : Achats en premier, Ventes en second
+    all_signals = buy_signals + sell_signals
+
+    if all_signals:
+        print(f"{len(all_signals)} signal/signaux trouvé(s) ({len(buy_signals)} Achat, {len(sell_signals)} Vente). Envoi sur Telegram...")
+        send_telegram(all_signals, config)
     else:
         print("Scan terminé. Aucun signal ne respecte les conditions actuelles.")
 
