@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import requests
 import time
+import plotly.graph_objects as go
 
 st.set_page_config(page_title="Crypto Scanner Pro", layout="wide")
 
@@ -34,7 +35,7 @@ else:
     atr_mult_tp = st.sidebar.number_input("Multiplicateur ATR TP", value=3.0, step=0.1)
     stop_loss_pct, take_profit_pct = 2.0, 6.0
 
-# --- LISTE DES PAIRES (TOP 100 COINBASE - RNDR RETIRÉ) ---
+# --- LISTE DES PAIRES (TOP 100 COINBASE) ---
 PAIRS_TOP_100 = [
     "BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "AVAX-USD", "DOT-USD", "LINK-USD", "LTC-USD", "BCH-USD", "UNI-USD",
     "ATOM-USD", "XLM-USD", "ETC-USD", "NEAR-USD", "ALGO-USD", "ICP-USD", "FIL-USD", "APT-USD", "OP-USD", "ARB-USD",
@@ -48,7 +49,7 @@ PAIRS_TOP_100 = [
     "REZ-USD", "BB-USD", "NOT-USD", "IO-USD", "ZK-USD", "ZRO-USD", "RARE-USD", "GVT-USD", "POL-USD", "SUPER-USD"
 ]
 
-# --- RECUPERATION DES DONNEES ---
+# --- RÉCUPÉRATION DES DONNÉES ---
 @st.cache_data(ttl=60)
 def fetch_data(symbol, interval):
     granularity_map = {"15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
@@ -96,7 +97,7 @@ def calculate_indicators(df):
 
     return df
 
-# --- SCAN DU MARCHE ---
+# --- SCAN DU MARCHÉ ---
 if st.button("🔄 Lancer le Scan du Marché (Top 100)", type="primary"):
     buy_signals = []
     sell_signals = []
@@ -189,7 +190,6 @@ if st.button("🔄 Lancer le Scan du Marché (Top 100)", type="primary"):
     if all_results:
         res_df = pd.DataFrame(all_results).drop(columns=["RSI_val"])
 
-        # Fonction de formatage universelle sans dépendance complexe à pandas.Styler
         def style_dataframe(df):
             def highlight(row):
                 val = row['Signal']
@@ -206,7 +206,85 @@ if st.button("🔄 Lancer le Scan du Marché (Top 100)", type="primary"):
         else:
             st.info("Aucun signal actif pour le moment. Affichage des cryptos neutres.")
 
-        # Affichage sécurisé compatible avec toutes les versions Streamlit et Pandas
-        st.dataframe(style_dataframe(res_df), use_container_width=True, height=800)
+        st.dataframe(style_dataframe(res_df), use_container_width=True, height=500)
     else:
         st.info("Aucune donnée disponible pour le moment.")
+
+# --- VOLET ROULANT & GRAPHIQUE BOUGIES ---
+st.markdown("---")
+st.subheader("📈 Graphique Interactif des Bougies & Signaux")
+
+selected_pair = st.selectbox("Sélectionnez une crypto-monnaie du Top 100 :", PAIRS_TOP_100, index=0)
+
+if selected_pair:
+    chart_df = fetch_data(selected_pair, timeframe)
+
+    if not chart_df.empty and len(chart_df) >= 201:
+        chart_df = calculate_indicators(chart_df)
+
+        # Détection des signaux historiques sur l'ensemble des bougies
+        buy_signals_x = []
+        buy_signals_y = []
+        sell_signals_x = []
+        sell_signals_y = []
+
+        for i in range(200, len(chart_df)):
+            p = chart_df['close'].iloc[i]
+            r = chart_df['RSI'].iloc[i]
+            e = chart_df['EMA200'].iloc[i]
+            t = chart_df['timestamp'].iloc[i]
+
+            if not pd.isna(r) and not pd.isna(e):
+                if r < rsi_oversold and (not use_ema_filter or p > e):
+                    buy_signals_x.append(t)
+                    buy_signals_y.append(chart_df['low'].iloc[i] * 0.995)
+                elif r > rsi_overbought and (not use_ema_filter or p < e):
+                    sell_signals_x.append(t)
+                    sell_signals_y.append(chart_df['high'].iloc[i] * 1.005)
+
+        fig = go.Figure()
+
+        # Graphique en bougies uniquement
+        fig.add_trace(go.Candlestick(
+            x=chart_df['timestamp'],
+            open=chart_df['open'],
+            high=chart_df['high'],
+            low=chart_df['low'],
+            close=chart_df['close'],
+            name="Prix"
+        ))
+
+        # Affichage des signaux d'achat
+        if buy_signals_x:
+            fig.add_trace(go.Scatter(
+                x=buy_signals_x,
+                y=buy_signals_y,
+                mode='markers',
+                marker=dict(symbol='triangle-up', size=12, color='green'),
+                name='Signal ACHAT'
+            ))
+
+        # Affichage des signaux de vente
+        if sell_signals_x:
+            fig.add_trace(go.Scatter(
+                x=sell_signals_x,
+                y=sell_signals_y,
+                mode='markers',
+                marker=dict(symbol='triangle-down', size=12, color='red'),
+                name='Signal VENTE'
+            ))
+
+        fig.update_layout(
+            title=f"Graphique {selected_pair} ({timeframe})",
+            yaxis_title="Prix ($)",
+            xaxis_title="Date / Heure",
+            xaxis_rangeslider_visible=False,
+            template="plotly_dark",
+            height=650,
+            margin=dict(l=20, r=20, t=50, b=20)
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning(f"Données insuffisantes pour afficher le graphique de {selected_pair}.")
+
