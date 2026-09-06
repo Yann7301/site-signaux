@@ -4,6 +4,7 @@ import requests
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import os
 
 PAIRS_TOP_30 = [
     "BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "AVAX-USD", 
@@ -14,25 +15,68 @@ PAIRS_TOP_30 = [
     "PEPE-USD", "DOGE-USD", "FET-USD", "AAVE-USD", "SHIB-USD"
 ]
 
+# --- CHARGEMENT DE LA CONFIGURATION ---
 def load_config():
-    default_config = {
-        "timeframe": "15m",
-        "capital_initial": 1000.0,
-        "type_sl_tp": "Pourcentage Fixe",
-        "stop_loss_pct": 1.5,
-        "take_profit_pct": 3.0,
-        "rsi_period": 14,
-        "rsi_oversold": 40,
-        "rsi_overbought": 60,
-        "atr_period": 14,
-        "atr_mult_sl": 1.5,
-        "atr_mult_tp": 3.0
-    }
+    # Lecture prioritaire des variables d'environnement (GitHub Actions)
+    email_sender = os.getenv("EMAIL_SENDER")
+    email_password = os.getenv("EMAIL_PASSWORD")
+    email_receiver = os.getenv("EMAIL_RECEIVER")
+
+    config = {}
     try:
         with open("config.json", "r") as f:
-            return json.load(f)
+            config = json.load(f)
     except FileNotFoundError:
-        return default_config
+        pass
+
+    return {
+        "timeframe": config.get("timeframe", "15m"),
+        "capital_initial": config.get("capital_initial", 1000.0),
+        "type_sl_tp": config.get("type_sl_tp", "Pourcentage Fixe"),
+        "stop_loss_pct": config.get("stop_loss_pct", 1.5),
+        "take_profit_pct": config.get("take_profit_pct", 3.0),
+        "rsi_period": config.get("rsi_period", 14),
+        "rsi_oversold": config.get("rsi_oversold", 40),
+        "rsi_overbought": config.get("rsi_overbought", 60),
+        "atr_period": config.get("atr_period", 14),
+        "atr_mult_sl": config.get("atr_mult_sl", 1.5),
+        "atr_mult_tp": config.get("atr_mult_tp", 3.0),
+        "email_sender": email_sender or config.get("email_sender", ""),
+        "email_password": email_password or config.get("email_password", ""),
+        "email_receiver": email_receiver or config.get("email_receiver", ""),
+        "smtp_server": config.get("smtp_server", "smtp.gmail.com"),
+        "smtp_port": config.get("smtp_port", 587)
+    }
+
+# --- FONCTION D'ENVOI D'E-MAIL ---
+def send_email(subject, body, config):
+    sender = config.get("email_sender")
+    password = config.get("email_password")
+    receiver = config.get("email_receiver")
+    smtp_server = config.get("smtp_server", "smtp.gmail.com")
+    smtp_port = config.get("smtp_port", 587)
+
+    if not sender or not password:
+        print("⚠️ Configuration e-mail incomplète. Alerte non envoyée.")
+        return
+
+    msg = MIMEMultipart()
+    msg['From'] = sender
+    msg['To'] = receiver
+    msg['Subject'] = subject
+    msg.attach(MIMEText(body, 'plain'))
+
+    try:
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        # Suppression des espaces éventuels dans le mot de passe d'application
+        clean_password = password.replace(" ", "")
+        server.login(sender, clean_password)
+        server.sendmail(sender, receiver, msg.as_string())
+        server.quit()
+        print("✉️ E-mail d'alerte envoyé avec succès !")
+    except Exception as e:
+        print(f"❌ Échec de l'envoi de l'e-mail : {e}")
 
 def fetch_data(symbol, interval):
     granularity_map = {
