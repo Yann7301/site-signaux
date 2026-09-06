@@ -34,8 +34,7 @@ def load_config():
         "telegram_chat_id": ""
     }
 
-PAIRS_TOP_30 = [
-    PAIRS_TOP_100 = [
+PAIRS_TOP_100 = [
     "BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "AVAX-USD", "DOT-USD", "LINK-USD", "LTC-USD", "BCH-USD", "UNI-USD",
     "ATOM-USD", "XLM-USD", "ETC-USD", "NEAR-USD", "ALGO-USD", "ICP-USD", "FIL-USD", "APT-USD", "OP-USD", "ARB-USD",
     "LDO-USD", "INJ-USD", "TIA-USD", "SUI-USD", "RENDER-USD", "PEPE-USD", "DOGE-USD", "FET-USD", "AAVE-USD", "ZEC-USD",
