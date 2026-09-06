@@ -5,6 +5,9 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 import os
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+import smtplib
 
 PAIRS_TOP_30 = [
     "BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "AVAX-USD", 
