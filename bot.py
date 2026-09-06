@@ -18,6 +18,8 @@ def load_config():
     # Valeurs par défaut si le fichier n'existe pas
     return {
         "timeframe": "1h",
+        "capital_initial": 100.0,
+        "risque_pct": 1.0,
         "type_sl_tp": "Pourcentage Fixe",
         "stop_loss_pct": 1.5,
         "take_profit_pct": 3.0,
@@ -63,15 +65,15 @@ def fetch_data(symbol, interval):
         print(f"Erreur d'extraction pour {symbol} : {e}")
     return pd.DataFrame()
 
-# --- CALCUL DES INDICATEURS (RSI, ATR, EMA 200) ---
+# --- CALCUL DES INDICATEURS ---
 def calculate_indicators(df, config):
     if len(df) < 200:
         return df
 
     # RSI
     delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=config["rsi_period"]).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=config["rsi_period"]).mean()
+    gain = (delta.where(delta > 0, 0)).rolling(window=config.get("rsi_period", 14)).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=config.get("rsi_period", 14)).mean()
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
 
@@ -81,14 +83,14 @@ def calculate_indicators(df, config):
     low_close = np.abs(df['low'] - df['close'].shift())
     ranges = pd.concat([high_low, high_close, low_close], axis=1)
     true_range = np.max(ranges, axis=1)
-    df['ATR'] = true_range.rolling(config["atr_period"]).mean()
+    df['ATR'] = true_range.rolling(config.get("atr_period", 14)).mean()
 
     # EMA 200
     df['EMA200'] = df['close'].ewm(span=200, adjust=False).mean()
 
     return df
 
-# --- ENVOI DE LA NOTIFICATION TELEGRAM ---
+# --- ENVOI TELEGRAM ---
 def send_telegram(signals, config):
     token = config.get("telegram_token") or os.getenv("TELEGRAM_TOKEN")
     chat_id = config.get("telegram_chat_id") or os.getenv("TELEGRAM_CHAT_ID")
@@ -98,7 +100,7 @@ def send_telegram(signals, config):
         return
 
     message = f"🚨 *ALERTES SCANNER CRYPTO* ({len(signals)})\n"
-    message += f"⏱ *Timeframe :* `{config.get('timeframe', '1h')}`\n"
+    message += f"⏱ *Timeframe :* `{config.get('timeframe', '1h')}` | *Capital :* `${config.get('capital_initial', 100.0)}`\n"
     message += "-----------------------------------\n\n"
 
     for s in signals:
@@ -144,19 +146,20 @@ def main():
             ema200 = df['EMA200'].iloc[-1]
 
             if not pd.isna(rsi) and not pd.isna(ema200):
-                if config["type_sl_tp"] == "Pourcentage Fixe":
-                    sl_price = price * (1 - config["stop_loss_pct"] / 100)
-                    tp_price = price * (1 + config["take_profit_pct"] / 100)
-                else:
-                    sl_price = price - (atr * config["atr_mult_sl"])
-                    tp_price = price + (atr * config["atr_mult_tp"])
-
                 trend = "🟢 Haussière" if price > ema200 else "🔴 Baissière"
 
-                is_buy = rsi < config["rsi_oversold"] and (not use_ema_filter or price > ema200)
-                is_sell = rsi > config["rsi_overbought"] and (not use_ema_filter or price < ema200)
+                is_buy = rsi < config.get("rsi_oversold", 30) and (not use_ema_filter or price > ema200)
+                is_sell = rsi > config.get("rsi_overbought", 70) and (not use_ema_filter or price < ema200)
 
                 if is_buy:
+                    # ACHAT (Long) : TP plus haut, SL plus bas
+                    if config["type_sl_tp"] == "Pourcentage Fixe":
+                        sl_price = price * (1 - config["stop_loss_pct"] / 100)
+                        tp_price = price * (1 + config["take_profit_pct"] / 100)
+                    else:
+                        sl_price = price - (atr * config["atr_mult_sl"])
+                        tp_price = price + (atr * config["atr_mult_tp"])
+
                     signals.append({
                         "Crypto": symbol,
                         "Signal": "🟢 ACHAT",
@@ -167,7 +170,16 @@ def main():
                         "Take Profit": f"${tp_price:,.4f}",
                         "Stop Loss": f"${sl_price:,.4f}"
                     })
+
                 elif is_sell:
+                    # VENTE (Short) : TP plus bas, SL plus haut
+                    if config["type_sl_tp"] == "Pourcentage Fixe":
+                        sl_price = price * (1 + config["stop_loss_pct"] / 100)
+                        tp_price = price * (1 - config["take_profit_pct"] / 100)
+                    else:
+                        sl_price = price + (atr * config["atr_mult_sl"])
+                        tp_price = price - (atr * config["atr_mult_tp"])
+
                     signals.append({
                         "Crypto": symbol,
                         "Signal": "🔴 VENTE",
