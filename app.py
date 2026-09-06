@@ -74,7 +74,7 @@ def fetch_data(symbol, interval):
 
 # --- CALCUL DES INDICATEURS ---
 def calculate_indicators(df):
-    if len(df) < 200:
+    if len(df) < 14:
         return df
 
     # RSI
@@ -92,8 +92,9 @@ def calculate_indicators(df):
     true_range = np.max(ranges, axis=1)
     df['ATR'] = true_range.rolling(14).mean()
 
-    # EMA 200
-    df['EMA200'] = df['close'].ewm(span=200, adjust=False).mean()
+    # EMA 200 (calculée sur au moins autant de périodes que possible)
+    ema_span = min(200, len(df))
+    df['EMA200'] = df['close'].ewm(span=ema_span, adjust=False).mean()
 
     return df
 
@@ -108,7 +109,7 @@ if st.button("🔄 Lancer le Scan du Marché (Top 100)", type="primary"):
 
     for idx, symbol in enumerate(PAIRS_TOP_100):
         df = fetch_data(symbol, timeframe)
-        if not df.empty and len(df) >= 201:
+        if not df.empty and len(df) >= 50:
             df = calculate_indicators(df)
 
             # Analyse sur la dernière bougie clôturée (index -2)
@@ -230,16 +231,17 @@ with col_tf:
 if selected_pair:
     chart_df = fetch_data(selected_pair, chart_timeframe)
 
-    if not chart_df.empty and len(chart_df) >= 201:
+    if not chart_df.empty and len(chart_df) >= 50:
         chart_df = calculate_indicators(chart_df)
 
         # Préparation des données pour ECharts : [ouvert, ferme, bas, haut]
         dates = chart_df['timestamp'].dt.strftime('%Y-%m-%d %H:%M').tolist()
         kline_data = chart_df[['open', 'close', 'low', 'high']].values.tolist()
 
-        # Signaux historiques
+        # Signaux historiques (calculés sur l'ensemble des données disponibles)
         signals_points = []
-        for i in range(200, len(chart_df)):
+        start_idx = max(14, len(chart_df) - 200)
+        for i in range(start_idx, len(chart_df)):
             p = chart_df['close'].iloc[i]
             r = chart_df['RSI'].iloc[i]
             e = chart_df['EMA200'].iloc[i]
@@ -287,8 +289,8 @@ if selected_pair:
                 "splitArea": {"show": True}
             },
             "dataZoom": [
-                {"type": "inside", "start": 70, "end": 100},
-                {"type": "slider", "start": 70, "end": 100}
+                {"type": "inside", "start": 50, "end": 100},
+                {"type": "slider", "start": 50, "end": 100}
             ],
             "series": [
                 {
@@ -314,8 +316,8 @@ if selected_pair:
 
         # --- RECAPITULATIF DES INFOS CLES (EN BAS DU GRAPHIQUE) ---
         last_price = chart_df['close'].iloc[-1]
-        prev_price = chart_df['close'].iloc[-2]
-        var_pct = ((last_price - prev_price) / prev_price) * 100
+        prev_price = chart_df['close'].iloc[-2] if len(chart_df) > 1 else last_price
+        var_pct = ((last_price - prev_price) / prev_price) * 100 if prev_price != 0 else 0
 
         last_rsi = chart_df['RSI'].iloc[-1]
         last_ema = chart_df['EMA200'].iloc[-1]
