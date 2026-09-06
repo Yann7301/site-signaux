@@ -6,7 +6,7 @@ import time
 
 st.set_page_config(page_title="Crypto Scanner Pro", layout="wide")
 
-st.title("📊 Scanner de Trading Crypto (Top 30 Coinbase)")
+st.title("📊 Scanner de Trading Crypto (Top 100 Coinbase)")
 
 # --- BARRE LATÉRALE : PARAMÈTRES ---
 st.sidebar.header("⚙️ Configuration des Signaux")
@@ -34,17 +34,18 @@ else:
     atr_mult_tp = st.sidebar.number_input("Multiplicateur ATR TP", value=3.0, step=0.1)
     stop_loss_pct, take_profit_pct = 1.5, 3.0
 
+# --- LISTE DES PAIRES (TOP 100 COINBASE - ZEC INCLUS, SHIB EXCLU) ---
 PAIRS_TOP_100 = [
     "BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "AVAX-USD", "DOT-USD", "LINK-USD", "LTC-USD", "BCH-USD", "UNI-USD",
     "ATOM-USD", "XLM-USD", "ETC-USD", "NEAR-USD", "ALGO-USD", "ICP-USD", "FIL-USD", "APT-USD", "OP-USD", "ARB-USD",
     "LDO-USD", "INJ-USD", "TIA-USD", "SUI-USD", "RENDER-USD", "PEPE-USD", "DOGE-USD", "FET-USD", "AAVE-USD", "ZEC-USD",
     "STX-USD", "CRV-USD", "MKR-USD", "GRT-USD", "RNDR-USD", "SNX-USD", "THETA-USD", "QNT-USD", "FTM-USD", "FLOW-USD",
-    "AXS-USD", "SAND-USD", "MANA-USD", "EGLD-USD", "CHZ-USD", "KSM-USD", "ZEC-USD", "COMP-USD", "DASH-USD", "ENJ-USD",
-    "1INCH-USD", "BAT-USD", "LRC-USD", "ANKR-USD", "STORJ-USD", "BAL-USD", "YFI-USD", "UMA-USD", "ZRX-USD", "KAVA-USD",
-    "SKL-USD", "RLC-USD", "BAND-USD", "NMR-USD", "CVC-USD", "OXT-USD", "POLS-USD", "ACH-USD", "SPELL-USD", "API3-USD",
-    "BLUR-USD", "MAGIC-USD", "GMX-USD", "OSMO-USD", "SEI-USD", "BONK-USD", "FLOKI-USD", "JUP-USD", "PYTH-USD", "STRK-USD",
-    "WIF-USD", "MEME-USD", "ALT-USD", "DYM-USD", "PIXEL-USD", "PORTAL-USD", "AEVO-USD", "ENA-USD", "W-USD", "TNSR-USD",
-    "OMNI-USD", "REZ-USD", "BB-USD", "NOT-USD", "IO-USD", "ZK-USD", "ZRO-USD", "RENDER-USD", "RARE-USD", "GVT-USD"
+    "AXS-USD", "SAND-USD", "MANA-USD", "EGLD-USD", "CHZ-USD", "KSM-USD", "COMP-USD", "DASH-USD", "ENJ-USD", "1INCH-USD",
+    "BAT-USD", "LRC-USD", "ANKR-USD", "STORJ-USD", "BAL-USD", "YFI-USD", "UMA-USD", "ZRX-USD", "KAVA-USD", "SKL-USD",
+    "RLC-USD", "BAND-USD", "NMR-USD", "CVC-USD", "OXT-USD", "POLS-USD", "ACH-USD", "SPELL-USD", "API3-USD", "BLUR-USD",
+    "MAGIC-USD", "GMX-USD", "OSMO-USD", "SEI-USD", "BONK-USD", "FLOKI-USD", "JUP-USD", "PYTH-USD", "STRK-USD", "WIF-USD",
+    "MEME-USD", "ALT-USD", "DYM-USD", "PIXEL-USD", "PORTAL-USD", "AEVO-USD", "ENA-USD", "W-USD", "TNSR-USD", "OMNI-USD",
+    "REZ-USD", "BB-USD", "NOT-USD", "IO-USD", "ZK-USD", "ZRO-USD", "RARE-USD", "GVT-USD", "POL-USD", "SUPER-USD"
 ]
 
 # --- RECUPERATION DES DONNEES ---
@@ -96,13 +97,15 @@ def calculate_indicators(df):
     return df
 
 # --- SCAN DU MARCHE ---
-if st.button("🔄 Lancer le Scan du Marché", type="primary"):
+if st.button("🔄 Lancer le Scan du Marché (Top 100)", type="primary"):
     buy_signals = []
     sell_signals = []
     neutral_signals = []
 
     progress_bar = st.progress(0)
-    for idx, symbol in enumerate(PAIRS_TOP_30):
+    total_pairs = len(PAIRS_TOP_100)
+
+    for idx, symbol in enumerate(PAIRS_TOP_100):
         df = fetch_data(symbol, timeframe)
         if not df.empty and len(df) >= 200:
             df = calculate_indicators(df)
@@ -169,8 +172,8 @@ if st.button("🔄 Lancer le Scan du Marché", type="primary"):
                         "Stop Loss": f"${sl_price:,.4f}"
                     })
 
-        progress_bar.progress((idx + 1) / len(PAIRS_TOP_30))
-        time.sleep(0.12)  # Pause anti-blocage API
+        progress_bar.progress((idx + 1) / total_pairs)
+        time.sleep(0.12)  # Pause anti-blocage API Coinbase
 
     progress_bar.empty()
 
@@ -185,7 +188,6 @@ if st.button("🔄 Lancer le Scan du Marché", type="primary"):
     if all_results:
         res_df = pd.DataFrame(all_results).drop(columns=["RSI_val"])
 
-        # Mise en valeur des signaux
         def highlight_signal(val):
             if "ACHAT" in val:
                 return 'background-color: #d4edda; color: #155724; font-weight: bold;'
@@ -193,7 +195,6 @@ if st.button("🔄 Lancer le Scan du Marché", type="primary"):
                 return 'background-color: #f8d7da; color: #721c24; font-weight: bold;'
             return ''
 
-        # Affichage du nombre de signaux trouvés
         total_signals = len(buy_signals) + len(sell_signals)
         if total_signals > 0:
             st.success(f"🔥 {total_signals} signal/signaux actif(s) détecté(s) ({len(buy_signals)} Achats, {len(sell_signals)} Ventes)")

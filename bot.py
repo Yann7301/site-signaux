@@ -5,7 +5,6 @@ import json
 import time
 import os
 
-# --- CHARGEMENT DE LA CONFIGURATION ---
 CONFIG_FILE = "config.json"
 
 def load_config():
@@ -34,20 +33,20 @@ def load_config():
         "telegram_chat_id": ""
     }
 
+# --- LISTE DES PAIRES (TOP 100 COINBASE - ZEC INCLUS, SHIB EXCLU) ---
 PAIRS_TOP_100 = [
     "BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "AVAX-USD", "DOT-USD", "LINK-USD", "LTC-USD", "BCH-USD", "UNI-USD",
     "ATOM-USD", "XLM-USD", "ETC-USD", "NEAR-USD", "ALGO-USD", "ICP-USD", "FIL-USD", "APT-USD", "OP-USD", "ARB-USD",
     "LDO-USD", "INJ-USD", "TIA-USD", "SUI-USD", "RENDER-USD", "PEPE-USD", "DOGE-USD", "FET-USD", "AAVE-USD", "ZEC-USD",
     "STX-USD", "CRV-USD", "MKR-USD", "GRT-USD", "RNDR-USD", "SNX-USD", "THETA-USD", "QNT-USD", "FTM-USD", "FLOW-USD",
-    "AXS-USD", "SAND-USD", "MANA-USD", "EGLD-USD", "CHZ-USD", "KSM-USD", "ZEC-USD", "COMP-USD", "DASH-USD", "ENJ-USD",
-    "1INCH-USD", "BAT-USD", "LRC-USD", "ANKR-USD", "STORJ-USD", "BAL-USD", "YFI-USD", "UMA-USD", "ZRX-USD", "KAVA-USD",
-    "SKL-USD", "RLC-USD", "BAND-USD", "NMR-USD", "CVC-USD", "OXT-USD", "POLS-USD", "ACH-USD", "SPELL-USD", "API3-USD",
-    "BLUR-USD", "MAGIC-USD", "GMX-USD", "OSMO-USD", "SEI-USD", "BONK-USD", "FLOKI-USD", "JUP-USD", "PYTH-USD", "STRK-USD",
-    "WIF-USD", "MEME-USD", "ALT-USD", "DYM-USD", "PIXEL-USD", "PORTAL-USD", "AEVO-USD", "ENA-USD", "W-USD", "TNSR-USD",
-    "OMNI-USD", "REZ-USD", "BB-USD", "NOT-USD", "IO-USD", "ZK-USD", "ZRO-USD", "RENDER-USD", "RARE-USD", "GVT-USD"
+    "AXS-USD", "SAND-USD", "MANA-USD", "EGLD-USD", "CHZ-USD", "KSM-USD", "COMP-USD", "DASH-USD", "ENJ-USD", "1INCH-USD",
+    "BAT-USD", "LRC-USD", "ANKR-USD", "STORJ-USD", "BAL-USD", "YFI-USD", "UMA-USD", "ZRX-USD", "KAVA-USD", "SKL-USD",
+    "RLC-USD", "BAND-USD", "NMR-USD", "CVC-USD", "OXT-USD", "POLS-USD", "ACH-USD", "SPELL-USD", "API3-USD", "BLUR-USD",
+    "MAGIC-USD", "GMX-USD", "OSMO-USD", "SEI-USD", "BONK-USD", "FLOKI-USD", "JUP-USD", "PYTH-USD", "STRK-USD", "WIF-USD",
+    "MEME-USD", "ALT-USD", "DYM-USD", "PIXEL-USD", "PORTAL-USD", "AEVO-USD", "ENA-USD", "W-USD", "TNSR-USD", "OMNI-USD",
+    "REZ-USD", "BB-USD", "NOT-USD", "IO-USD", "ZK-USD", "ZRO-USD", "RARE-USD", "GVT-USD", "POL-USD", "SUPER-USD"
 ]
 
-# --- RECUPERATION DES DONNEES ---
 def fetch_data(symbol, interval):
     granularity_map = {"15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
     granularity = granularity_map.get(interval, 3600)
@@ -69,19 +68,16 @@ def fetch_data(symbol, interval):
         print(f"Erreur d'extraction pour {symbol} : {e}")
     return pd.DataFrame()
 
-# --- CALCUL DES INDICATEURS ---
 def calculate_indicators(df, config):
     if len(df) < 200:
         return df
 
-    # RSI
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=config.get("rsi_period", 14)).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=config.get("rsi_period", 14)).mean()
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
 
-    # ATR
     high_low = df['high'] - df['low']
     high_close = np.abs(df['high'] - df['close'].shift())
     low_close = np.abs(df['low'] - df['close'].shift())
@@ -89,12 +85,10 @@ def calculate_indicators(df, config):
     true_range = np.max(ranges, axis=1)
     df['ATR'] = true_range.rolling(config.get("atr_period", 14)).mean()
 
-    # EMA 200
     df['EMA200'] = df['close'].ewm(span=200, adjust=False).mean()
 
     return df
 
-# --- ENVOI TELEGRAM ---
 def send_telegram(signals, config):
     token = config.get("telegram_token") or os.getenv("TELEGRAM_TOKEN")
     chat_id = config.get("telegram_chat_id") or os.getenv("TELEGRAM_CHAT_ID")
@@ -103,16 +97,27 @@ def send_telegram(signals, config):
         print("Paramètres Telegram manquants (TOKEN ou CHAT_ID). Envoi ignoré.")
         return
 
-    message = f"🚨 *ALERTES SCANNER CRYPTO* ({len(signals)})\n"
-    message += f"⏱ *Timeframe :* `{config.get('timeframe', '1h')}` | *Capital :* `${config.get('capital_initial', 100.0)}`\n"
+    tf = config.get('timeframe', '1h')
+    cap = config.get('capital_initial', 100.0)
+    message = f"🚨 *ALERTES SCANNER CRYPTO (Top 100)* ({len(signals)})\n"
+    message += f"⏱ *Timeframe :* `{tf}` | *Capital :* `${cap}`\n"
     message += "-----------------------------------\n\n"
 
     for s in signals:
-        message += f"🪙 *{s['Crypto']}* | {s['Signal']}\n"
-        message += f"💵 *Prix d'entrée :* `{s['Prix d\'entrée']}`\n"
-        message += f"📊 *RSI :* `{s['RSI']}` | *EMA 200 :* `{s['EMA 200']}` ({s['Tendance']})\n"
-        message += f"🎯 *Take Profit :* `{s['Take Profit']}`\n"
-        message += f"🛑 *Stop Loss :* `{s['Stop Loss']}`\n"
+        entry_price = s['Prix d_entree']
+        crypto = s['Crypto']
+        sig = s['Signal']
+        rsi_val = s['RSI']
+        ema_val = s['EMA 200']
+        tend = s['Tendance']
+        tp = s['Take Profit']
+        sl = s['Stop Loss']
+
+        message += f"🪙 *{crypto}* | {sig}\n"
+        message += f"💵 *Prix d'entrée :* `{entry_price}`\n"
+        message += f"📊 *RSI :* `{rsi_val}` | *EMA 200 :* `{ema_val}` ({tend})\n"
+        message += f"🎯 *Take Profit :* `{tp}`\n"
+        message += f"🛑 *Stop Loss :* `{sl}`\n"
         message += "-----------------------------------\n"
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -131,16 +136,15 @@ def send_telegram(signals, config):
     except Exception as e:
         print(f"Erreur lors de l'envoi du message Telegram : {e}")
 
-# --- EXECUTION PRINCIPALE ---
 def main():
     config = load_config()
-    print(f"Lancement du scan... Timeframe: {config['timeframe']} | Filtre EMA 200: {config.get('use_ema_filter', True)}")
+    print(f"Lancement du scan Top 100... Timeframe: {config['timeframe']} | Filtre EMA 200: {config.get('use_ema_filter', True)}")
 
     buy_signals = []
     sell_signals = []
     use_ema_filter = config.get("use_ema_filter", True)
 
-    for symbol in PAIRS_TOP_30:
+    for symbol in PAIRS_TOP_100:
         df = fetch_data(symbol, config["timeframe"])
         if not df.empty and len(df) >= 200:
             df = calculate_indicators(df, config)
@@ -167,7 +171,7 @@ def main():
                     buy_signals.append({
                         "Crypto": symbol,
                         "Signal": "🟢 ACHAT",
-                        "Prix d'entrée": f"${price:,.4f}",
+                        "Prix d_entree": f"${price:,.4f}",
                         "RSI_val": rsi,
                         "RSI": round(rsi, 1),
                         "EMA 200": f"${ema200:,.4f}",
@@ -187,7 +191,7 @@ def main():
                     sell_signals.append({
                         "Crypto": symbol,
                         "Signal": "🔴 VENTE",
-                        "Prix d'entrée": f"${price:,.4f}",
+                        "Prix d_entree": f"${price:,.4f}",
                         "RSI_val": rsi,
                         "RSI": round(rsi, 1),
                         "EMA 200": f"${ema200:,.4f}",
@@ -196,13 +200,12 @@ def main():
                         "Stop Loss": f"${sl_price:,.4f}"
                     })
 
-        time.sleep(0.12)  # Pause anti-blocage API
+        time.sleep(0.12)
 
     # Tri par RSI croissant (du plus petit au plus grand)
     buy_signals = sorted(buy_signals, key=lambda x: x["RSI_val"])
     sell_signals = sorted(sell_signals, key=lambda x: x["RSI_val"])
 
-    # Fusion : Achats en premier, Ventes en second
     all_signals = buy_signals + sell_signals
 
     if all_signals:
