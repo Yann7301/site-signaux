@@ -4,12 +4,11 @@ import numpy as np
 import requests
 import json
 import os
-from datetime import datetime
 import time
 
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(
-    page_title="Scanner Trading Coinbase RSI/ATR",
+    page_title="Scanner Trading Coinbase RSI/ATR/EMA",
     page_icon="📈",
     layout="wide"
 )
@@ -23,7 +22,6 @@ PAIRS_TOP_30 = [
     "PEPE-USD", "DOGE-USD", "FET-USD", "AAVE-USD", "SHIB-USD"
 ]
 
-# --- CHARGEMENT / SAUVEGARDE CONFIG.JSON ---
 CONFIG_FILE = "config.json"
 
 def load_config():
@@ -45,6 +43,7 @@ def load_config():
         "atr_period": 14,
         "atr_mult_sl": 1.5,
         "atr_mult_tp": 3.0,
+        "use_ema_filter": True,
         "email_sender": "",
         "email_password": "",
         "email_receiver": "",
@@ -56,7 +55,6 @@ def save_config(config):
     with open(CONFIG_FILE, "w") as f:
         json.dump(config, f, indent=4)
 
-# --- RECUPÉRATION ET CALCULS ---
 @st.cache_data(ttl=60)
 def fetch_data(symbol, interval):
     granularity_map = {"15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
@@ -76,19 +74,21 @@ def fetch_data(symbol, interval):
                 df[cols] = df[cols].astype(float)
                 return df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
     except Exception as e:
-        st.error(f"Erreur lors de la récupération de {symbol} : {e}")
+        st.error(f"Erreur pour {symbol} : {e}")
     return pd.DataFrame()
 
 def calculate_indicators(df, config):
-    if len(df) < config["rsi_period"]:
+    if len(df) < 200:
         return df
 
+    # RSI
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=config["rsi_period"]).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=config["rsi_period"]).mean()
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
 
+    # ATR
     high_low = df['high'] - df['low']
     high_close = np.abs(df['high'] - df['close'].shift())
     low_close = np.abs(df['low'] - df['close'].shift())
@@ -96,20 +96,23 @@ def calculate_indicators(df, config):
     true_range = np.max(ranges, axis=1)
     df['ATR'] = true_range.rolling(config["atr_period"]).mean()
 
+    # EMA 200
+    df['EMA200'] = df['close'].ewm(span=200, adjust=False).mean()
+
     return df
 
 # --- INTERFACE STREAMLIT ---
 config = load_config()
 
-st.title("📈 Scanner de Trading Coinbase RSI/ATR")
-st.markdown("Analyse en temps réel des 30 paires cryptos majeures de Coinbase.")
+st.title("📈 Scanner de Trading Coinbase RSI / ATR / EMA 200")
+st.markdown("Filtrage dynamique de la tendance globale via EMA 200 sur le Top 30 Coinbase.")
 
-# --- BARRE LATÉRALE : PARAMÈTRES ---
+# --- BARRE LATÉRALE ---
 st.sidebar.header("⚙️ Configuration")
-
 timeframe = st.sidebar.selectbox("Timeframe", ["15m", "1h", "4h", "1d"], index=["15m", "1h", "4h", "1d"].index(config.get("timeframe", "1h")))
 
-st.sidebar.subheader("Indicateurs")
+st.sidebar.subheader("Indicateurs & Filtre")
+use_ema_filter = st.sidebar.checkbox("Activer le filtre de tendance EMA 200", value=config.get("use_ema_filter", True))
 rsi_period = st.sidebar.number_input("Période RSI", value=int(config.get("rsi_period", 14)))
 rsi_oversold = st.sidebar.number_input("Seuil Survendu (Achat)", value=int(config.get("rsi_oversold", 30)))
 rsi_overbought = st.sidebar.number_input("Seuil Suracheté (Vente)", value=int(config.get("rsi_overbought", 70)))
@@ -127,11 +130,6 @@ else:
     atr_mult_sl = st.sidebar.number_input("Multiplicateur ATR SL", value=float(config.get("atr_mult_sl", 1.5)))
     atr_mult_tp = st.sidebar.number_input("Multiplicateur ATR TP", value=float(config.get("atr_mult_tp", 3.0)))
 
-st.sidebar.subheader("📧 Paramètres E-mail")
-email_sender = st.sidebar.text_input("Expéditeur (Gmail)", value=config.get("email_sender", ""))
-email_password = st.sidebar.text_input("Mot de passe d'application", value=config.get("email_password", ""), type="password")
-email_receiver = st.sidebar.text_input("Destinataire", value=config.get("email_receiver", ""))
-
 if st.sidebar.button("💾 Sauvegarder la configuration"):
     new_config = {
         "timeframe": timeframe,
@@ -145,35 +143,36 @@ if st.sidebar.button("💾 Sauvegarder la configuration"):
         "atr_period": config.get("atr_period", 14),
         "atr_mult_sl": atr_mult_sl,
         "atr_mult_tp": atr_mult_tp,
-        "email_sender": email_sender,
-        "email_password": email_password,
-        "email_receiver": email_receiver,
+        "use_ema_filter": use_ema_filter,
+        "email_sender": config.get("email_sender", ""),
+        "email_password": config.get("email_password", ""),
+        "email_receiver": config.get("email_receiver", ""),
         "smtp_server": "smtp.gmail.com",
         "smtp_port": 587
     }
     save_config(new_config)
-    st.sidebar.success("Configuration sauvegardée dans config.json !")
+    st.sidebar.success("Configuration sauvegardée !")
 
 # --- EXÉCUTION DU SCAN ---
 if st.button("🚀 Lancer le Scan"):
     current_config = load_config()
-    st.info(f"Analyse en cours sur 30 cryptos ({timeframe})...")
+    st.info(f"Analyse en cours sur 30 cryptos ({timeframe}) avec Filtre EMA 200 : {'Activé' if use_ema_filter else 'Désactivé'}...")
 
     results = []
     signals = []
-
     progress_bar = st.progress(0)
-    
+
     for i, symbol in enumerate(PAIRS_TOP_30):
         df = fetch_data(symbol, timeframe)
-        if not df.empty and len(df) >= current_config["rsi_period"]:
+        if not df.empty and len(df) >= 200:
             df = calculate_indicators(df, current_config)
-            
+
             price = df['close'].iloc[-1]
             rsi = df['RSI'].iloc[-1]
             atr = df['ATR'].iloc[-1] if not pd.isna(df['ATR'].iloc[-1]) else 0
-            
-            if not pd.isna(rsi):
+            ema200 = df['EMA200'].iloc[-1]
+
+            if not pd.isna(rsi) and not pd.isna(ema200):
                 if current_config["type_sl_tp"] == "Pourcentage Fixe":
                     sl_price = price * (1 - current_config["stop_loss_pct"] / 100)
                     tp_price = price * (1 + current_config["take_profit_pct"] / 100)
@@ -182,23 +181,33 @@ if st.button("🚀 Lancer le Scan"):
                     tp_price = price + (atr * current_config["atr_mult_tp"])
 
                 signal_type = "NEUTRE"
-                if rsi < current_config["rsi_oversold"]:
+                trend = "🟢 Haussière" if price > ema200 else "🔴 Baissière"
+
+                # Application des conditions avec ou sans filtre EMA
+                is_buy = rsi < current_config["rsi_oversold"] and (not use_ema_filter or price > ema200)
+                is_sell = rsi > current_config["rsi_overbought"] and (not use_ema_filter or price < ema200)
+
+                if is_buy:
                     signal_type = "🟢 ACHAT"
                     signals.append({
                         "Crypto": symbol,
                         "Signal": signal_type,
                         "Prix d'entrée": f"${price:,.4f}",
                         "RSI": round(rsi, 1),
+                        "EMA 200": f"${ema200:,.4f}",
+                        "Tendance": trend,
                         "Take Profit": f"${tp_price:,.4f}",
                         "Stop Loss": f"${sl_price:,.4f}"
                     })
-                elif rsi > current_config["rsi_overbought"]:
+                elif is_sell:
                     signal_type = "🔴 VENTE"
                     signals.append({
                         "Crypto": symbol,
                         "Signal": signal_type,
                         "Prix d'entrée": f"${price:,.4f}",
                         "RSI": round(rsi, 1),
+                        "EMA 200": f"${ema200:,.4f}",
+                        "Tendance": trend,
                         "Take Profit": f"${tp_price:,.4f}",
                         "Stop Loss": f"${sl_price:,.4f}"
                     })
@@ -207,19 +216,21 @@ if st.button("🚀 Lancer le Scan"):
                     "Crypto": symbol,
                     "Prix d'entrée": f"${price:,.4f}",
                     "RSI": round(rsi, 1),
+                    "EMA 200": f"${ema200:,.4f}",
+                    "Tendance": trend,
                     "Signal": signal_type,
                     "Take Profit": f"${tp_price:,.4f}",
                     "Stop Loss": f"${sl_price:,.4f}"
                 })
-        
+
         progress_bar.progress((i + 1) / len(PAIRS_TOP_30))
         time.sleep(0.05)
 
-    st.subheader("📢 Signaux Détectés")
+    st.subheader("📢 Signaux Validés par la Tendance")
     if signals:
         st.dataframe(pd.DataFrame(signals), use_container_width=True)
     else:
-        st.info("Aucun signal d'achat ou de vente détecté actuellement.")
+        st.info("Aucun signal correspondant aux critères de tendance actuels.")
 
     st.subheader("📊 Tableau Général des 30 Cryptos")
     if results:
