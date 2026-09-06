@@ -10,11 +10,11 @@ from email.mime.text import MIMEText
 import smtplib
 
 PAIRS_TOP_30 = [
-    "BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "AVAX-USD", 
-    "DOT-USD", "LINK-USD", "LTC-USD", "BCH-USD", "UNI-USD", 
-    "ATOM-USD", "XLM-USD", "ETC-USD", "NEAR-USD", "ALGO-USD", 
-    "ICP-USD", "FIL-USD", "APT-USD", "OP-USD", "ARB-USD", 
-    "LDO-USD", "INJ-USD", "TIA-USD", "SUI-USD", "RENDER-USD", 
+    "BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "AVAX-USD",
+    "DOT-USD", "LINK-USD", "LTC-USD", "BCH-USD", "UNI-USD",
+    "ATOM-USD", "XLM-USD", "ETC-USD", "NEAR-USD", "ALGO-USD",
+    "ICP-USD", "FIL-USD", "APT-USD", "OP-USD", "ARB-USD",
+    "LDO-USD", "INJ-USD", "TIA-USD", "SUI-USD", "RENDER-USD",
     "PEPE-USD", "DOGE-USD", "FET-USD", "AAVE-USD", "SHIB-USD"
 ]
 
@@ -132,7 +132,7 @@ def run_bot():
     print(f"🚀 Bot démarré le {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"🔄 Analyse Coinbase en cours sur 30 cryptos ({config['timeframe']})...\n")
 
-    signals_found = 0
+    detected_signals = []
 
     for symbol in PAIRS_TOP_30:
         df = fetch_data(symbol, config["timeframe"])
@@ -158,16 +158,26 @@ def run_bot():
             tp_price = price + (atr * config["atr_mult_tp"])
 
         if rsi < config["rsi_oversold"]:
-            signals_found += 1
-            print(f"🟢 [ACHAT] {symbol} | Prix: ${price:,.4f} | RSI: {rsi:.1f} | TP: ${tp_price:,.4f} | SL: ${sl_price:,.4f}")
+            msg = f"🟢 [ACHAT] {symbol} | Prix: ${price:,.4f} | RSI: {rsi:.1f} | TP: ${tp_price:,.4f} | SL: ${sl_price:,.4f}"
+            print(msg)
+            detected_signals.append(msg)
         elif rsi > config["rsi_overbought"]:
-            signals_found += 1
-            print(f"🔴 [VENTE] {symbol} | Prix: ${price:,.4f} | RSI: {rsi:.1f} | TP: ${tp_price:,.4f} | SL: ${sl_price:,.4f}")
+            msg = f"🔴 [VENTE] {symbol} | Prix: ${price:,.4f} | RSI: {rsi:.1f} | TP: ${tp_price:,.4f} | SL: ${sl_price:,.4f}"
+            print(msg)
+            detected_signals.append(msg)
 
-    if signals_found == 0:
-        print("💤 Aucun signal détecté sur ce cycle.")
+    # --- ENVOI DES RETOURS ---
+    if detected_signals:
+        print(f"\n📢 {len(detected_signals)} signal(s) trouvé(s). Envoi de l'e-mail...")
+        email_subject = f"🚨 {len(detected_signals)} Signal(s) Trading Détecté(s)"
+        email_body = f"Bonjour,\n\nVoici les signaux détectés le {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} :\n\n"
+        email_body += "\n".join(detected_signals)
+        email_body += "\n\nBon trading !"
 
-    print(f"\n✅ Analyse terminée.")
+        send_email(email_subject, email_body, config)
+    else:
+        print("\n💤 Aucun signal détecté sur ce cycle. Aucun e-mail envoyé.")
+
 
 if __name__ == "__main__":
     run_bot()
