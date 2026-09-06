@@ -2,10 +2,7 @@ import pandas as pd
 import numpy as np
 import requests
 import json
-import smtplib
 import os
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 
 # --- CHARGEMENT DE LA CONFIGURATION ---
 CONFIG_FILE = "config.json"
@@ -31,11 +28,8 @@ def load_config():
         "atr_mult_sl": 1.5,
         "atr_mult_tp": 3.0,
         "use_ema_filter": True,
-        "email_sender": "",
-        "email_password": "",
-        "email_receiver": "",
-        "smtp_server": "smtp.gmail.com",
-        "smtp_port": 587
+        "telegram_token": "",
+        "telegram_chat_id": ""
     }
 
 PAIRS_TOP_30 = [
@@ -94,72 +88,42 @@ def calculate_indicators(df, config):
 
     return df
 
-# --- ENVOI DE L'EMAIL ---
-def send_email(signals, config):
-    sender = config.get("email_sender") or os.getenv("EMAIL_SENDER")
-    password = config.get("email_password") or os.getenv("EMAIL_PASSWORD")
-    receiver = config.get("email_receiver") or os.getenv("EMAIL_RECEIVER")
-    smtp_server = config.get("smtp_server", "smtp.gmail.com")
-    smtp_port = config.get("smtp_port", 587)
+# --- ENVOI DE LA NOTIFICATION TELEGRAM ---
+def send_telegram(signals, config):
+    token = config.get("telegram_token") or os.getenv("TELEGRAM_TOKEN")
+    chat_id = config.get("telegram_chat_id") or os.getenv("TELEGRAM_CHAT_ID")
 
-    if not sender or not password or not receiver:
-        print("Paramètres e-mail manquants. Envoi ignoré.")
+    if not token or not chat_id:
+        print("Paramètres Telegram manquants (TOKEN ou CHAT_ID). Envoi ignoré.")
         return
 
-    msg = MIMEMultipart("alternative")
-    msg['Subject'] = f"🚨 Alertes Trading Crypto ({len(signals)} opportunité(s))"
-    msg['From'] = sender
-    msg['To'] = receiver
-
-    html_content = f"""
-    <html>
-      <body>
-        <h2>Alerte Scanner Crypto (Timeframe: {config.get('timeframe', '1h')})</h2>
-        <p>Voici les opportunités détectées selon la tendance EMA 200 :</p>
-        <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse;">
-          <tr style="background-color: #f2f2f2;">
-            <th>Crypto</th>
-            <th>Signal</th>
-            <th>Prix d'Entrée</th>
-            <th>RSI</th>
-            <th>EMA 200</th>
-            <th>Tendance</th>
-            <th>Take Profit</th>
-            <th>Stop Loss</th>
-          </tr>
-    """
+    message = f"🚨 *ALERTES SCANNER CRYPTO* ({len(signals)})\n"
+    message += f"⏱ *Timeframe :* `{config.get('timeframe', '1h')}`\n"
+    message += "-----------------------------------\n\n"
 
     for s in signals:
-        html_content += f"""
-          <tr>
-            <td><b>{s['Crypto']}</b></td>
-            <td>{s['Signal']}</td>
-            <td>{s['Prix d\'entrée']}</td>
-            <td>{s['RSI']}</td>
-            <td>{s['EMA 200']}</td>
-            <td>{s['Tendance']}</td>
-            <td style="color: green;">{s['Take Profit']}</td>
-            <td style="color: red;">{s['Stop Loss']}</td>
-          </tr>
-        """
+        message += f"🪙 *{s['Crypto']}* | {s['Signal']}\n"
+        message += f"💵 *Prix d'entrée :* `{s['Prix d\'entrée']}`\n"
+        message += f"📊 *RSI :* `{s['RSI']}` | *EMA 200 :* `{s['EMA 200']}` ({s['Tendance']})\n"
+        message += f"🎯 *Take Profit :* `{s['Take Profit']}`\n"
+        message += f"🛑 *Stop Loss :* `{s['Stop Loss']}`\n"
+        message += "-----------------------------------\n"
 
-    html_content += """
-        </table>
-      </body>
-    </html>
-    """
-
-    msg.attach(MIMEText(html_content, "html"))
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": message,
+        "parse_mode": "Markdown"
+    }
 
     try:
-        server = smtplib.SMTP(smtp_server, smtp_port)
-        server.starttls()
-        server.login(sender, password)
-        server.sendmail(sender, receiver, msg.as_string())
-        server.quit()
-        print("E-mail envoyé avec succès !")
+        res = requests.post(url, json=payload, timeout=10)
+        if res.status_code == 200:
+            print("Message Telegram envoyé avec succès !")
+        else:
+            print(f"Erreur Telegram ({res.status_code}) : {res.text}")
     except Exception as e:
-        print(f"Erreur lors de l'envoi de l'e-mail : {e}")
+        print(f"Erreur lors de l'envoi du message Telegram : {e}")
 
 # --- EXECUTION PRINCIPALE ---
 def main():
@@ -216,8 +180,8 @@ def main():
                     })
 
     if signals:
-        print(f"{len(signals)} signal/signaux trouvé(s). Envoi du rapport...")
-        send_email(signals, config)
+        print(f"{len(signals)} signal/signaux trouvé(s). Envoi sur Telegram...")
+        send_telegram(signals, config)
     else:
         print("Scan terminé. Aucun signal ne respecte les conditions actuelles.")
 
