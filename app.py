@@ -25,8 +25,8 @@ st.sidebar.subheader("Gestion des Risques (SL / TP)")
 type_sl_tp = st.sidebar.radio("Mode de calcul SL/TP", ["Pourcentage Fixe", "Basé sur ATR"])
 
 if type_sl_tp == "Pourcentage Fixe":
-    stop_loss_pct = st.sidebar.number_input("Stop Loss (%)", value=1.5, step=0.1)
-    take_profit_pct = st.sidebar.number_input("Take Profit (%)", value=3.0, step=0.1)
+    stop_loss_pct = st.sidebar.number_input("Stop Loss (%)", value=2.0, step=0.1)
+    take_profit_pct = st.sidebar.number_input("Take Profit (%)", value=6.0, step=0.1)
     atr_mult_sl, atr_mult_tp = 1.5, 3.0
 else:
     atr_period = st.sidebar.slider("Période ATR", 5, 30, 14)
